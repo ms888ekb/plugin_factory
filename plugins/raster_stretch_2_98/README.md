@@ -1,0 +1,1 @@
+Read active raster, compute percent-clipped min/max, apply renderer; add dock widget with preview.
