@@ -21,11 +21,13 @@
  *                                                                         *
  ***************************************************************************/
 """
+import numpy as np
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 from qgis._core import QgsRasterLayer, QgsRectangle, QgsRasterBandStats, QgsRasterHistogram, QgsContrastEnhancement, \
-    QgsSingleBandGrayRenderer
+    QgsSingleBandGrayRenderer, QgsMultiBandColorRenderer, QgsRasterRenderer, QgsMapLayer, \
+    QgsSingleBandPseudoColorRenderer, QgsRasterRange
 from qgis.core import QgsProject
 from qgis.core import Qgis
 import os
@@ -44,79 +46,6 @@ except ImportError:
     from resources import *
 
 import os.path
-
-
-def _percentile_from_hist(provider, band, lower_pct, upper_pct, extent=None, bins=256):
-    """Calculate lower and upper percentile values from raster histogram.
-
-    :param provider: raster data provider
-    :type provider: QgsRasterDataProvider
-    :param band: band number (1-based)
-    :type band: int
-    :param lower_pct: lower percentile (0-100)
-    :type lower_pct: float
-    :param upper_pct: upper percentile (0-100)
-    :type upper_pct: float
-    :param extent: optional extent to limit calculation
-    :type extent: QgsRectangle or None
-    :param bins: number of histogram bins (default 256)
-    :type bins: int
-
-    :returns: (lower_value, upper_value) tuple corresponding to the percentiles
-    :rtype: (float, float)
-    """
-    if extent is None:
-        extent = QgsRectangle()
-
-    stats = provider.bandStatistics(band, QgsRasterBandStats.Min | QgsRasterBandStats.Max, extent, 0)
-    if stats is None or stats.minimumValue is None or stats.maximumValue is None:
-        return None, None
-
-    minval = stats.minimumValue
-    maxval = stats.maximumValue
-    if not (minval < maxval):
-        return None, None
-
-    h = provider.histogram(band, bins, minval, maxval, extent)
-    if not isinstance(h, QgsRasterHistogram):
-        return None, None
-
-    counts = list(h.histogramVector) if hasattr(h, 'histogramVector') else None
-    if counts is None or len(counts) != bins:
-        return None, None
-
-    total = sum(counts)
-    if total <= 0:
-        return None, None
-
-    # acc
-    acc = 0
-    lower_threshold = total * (lower_pct / 100.0)
-    upper_threshold = total * (upper_pct / 100.0)
-
-    low_bin = 0
-    high_bin = len(counts) - 1
-
-    for i, count in enumerate(counts):
-        acc += count
-        if acc >= lower_threshold:
-            low_bin = i
-            break
-    acc2 = 0
-    for i in range(len(counts) - 1, -1, -1):
-        acc2 += counts[i]
-        if acc2 >= (total - upper_threshold):
-            high_bin = i
-            break
-
-    bin_width = (maxval - minval) / float(len(counts))
-    lower_value = minval + bin_width * low_bin
-    upper_value = minval + bin_width * (high_bin + 1)
-
-    if lower_value >= upper_value:
-        return None, None
-
-    return lower_value, upper_value
 
 
 class RasterStretch:
@@ -294,23 +223,126 @@ class RasterStretch:
         del self.toolbar
 
     #--------------------------------------------------------------------------
+    def _percentile_from_hist(self, provider, band, lower_pct, upper_pct, extent=None, bins=256):
+        """Calculate lower and upper percentile values from raster histogram.
+
+        :param provider: raster data provider
+        :type provider: QgsRasterDataProvider
+        :param band: band number (1-based)
+        :type band: int
+        :param lower_pct: lower percentile (0-100)
+        :type lower_pct: float
+        :param upper_pct: upper percentile (0-100)
+        :type upper_pct: float
+        :param extent: optional extent to limit calculation
+        :type extent: QgsRectangle or None
+        :param bins: number of histogram bins (default 256)
+        :type bins: int
+
+        :returns: (lower_value, upper_value) tuple corresponding to the percentiles
+        :rtype: (float, float)
+        """
+        if extent is None:
+            extent = QgsRectangle()
+
+        # Check if raster has assigned nodata value:
+        provider.reload()
+        user_rng = provider.userNoDataValues(band)
+
+        #
+        # if nodata is not None:
+        #     self.iface.messageBar().pushMessage("RasterStretch", f"Raster has NoData value: {nodata}", level=Qgis.Info, duration=3)
+        #     rng = QgsRasterRange(nodata, nodata)
+
+        if self.dockwidget.lineEditNoData.isEnabled():
+            try:
+                nodata_val = float(self.dockwidget.lineEditNoData.text())
+            except ValueError:
+                nodata_val = None
+
+            if nodata_val is not None:
+                self.iface.messageBar().pushMessage("RasterStretch", f"Setting NoData value: {nodata_val}", level=Qgis.Info, duration=3)
+                rng = [QgsRasterRange(nodata_val, nodata_val)]
+            else:
+                self.iface.messageBar().pushMessage("RasterStretch", f"Clear NoData value", level=Qgis.Info, duration=3)
+                rng = [QgsRasterRange()]
+
+            provider.setUserNoDataValue(band, rng)
+        self.iface.messageBar().pushMessage("dbg",
+                                            f"user ranges={provider.userNoDataValues(band)}, "
+                                            f"sourceHasND={provider.sourceHasNoDataValue(band)}, "
+                                            f"sourceND={provider.sourceNoDataValue(band)}",
+                                            level=Qgis.Info, duration=4)
+        stats = provider.bandStatistics(band, QgsRasterBandStats.Min | QgsRasterBandStats.Max, extent, 0)
+        if stats is None or stats.minimumValue is None or stats.maximumValue is None:
+            return None, None
+
+        minval = stats.minimumValue
+        maxval = stats.maximumValue
+        self.iface.messageBar().pushMessage("RasterStretch", f"Band stats: min={minval}, max={maxval}", level=Qgis.Warning, duration=3)
+
+        if minval > maxval:
+            return None, None
+
+        h = provider.histogram(band, bins, minval, maxval, extent)
+
+        if not isinstance(h, QgsRasterHistogram):
+            return None, None
+
+        counts = list(h.histogramVector) if hasattr(h, 'histogramVector') else None
+        if counts is None or len(counts) != bins:
+            return None, None
+
+        total = sum(counts)
+        if total <= 0:
+            return None, None
+
+        # acc
+        acc = 0
+        lower_threshold = total * (lower_pct / 100.0)
+        upper_threshold = total * (upper_pct / 100.0)
+
+        low_bin = 0
+        high_bin = len(counts) - 1
+
+        for i, count in enumerate(counts):
+            acc += count
+            if acc >= lower_threshold:
+                low_bin = i
+                break
+        acc2 = 0
+        for i in range(len(counts) - 1, -1, -1):
+            acc2 += counts[i]
+            if acc2 >= (total - upper_threshold):
+                high_bin = i
+                break
+
+        bin_width = (maxval - minval) / float(len(counts))
+        lower_value = minval + bin_width * low_bin
+        upper_value = minval + bin_width * (high_bin + 1)
+
+        if lower_value >= upper_value:
+            return None, None
+
+        if self.dockwidget.lineEditNoData.isEnabled():
+            provider.setUserNoDataValue(band, user_rng)
+            provider.reload()
+
+        return lower_value, upper_value
 
     def run(self):
         """Run method that loads and starts the plugin"""
 
         if not self.pluginIsActive:
             self.pluginIsActive = True
-
             if self.dockwidget == None:
                 # Create the dockwidget (after translation) and keep reference
                 self.dockwidget = RasterStretchDockWidget()
-
-                self.iface.messageBar().pushMessage("RasterStretch", f"PLUGIN DIR: {os.path.dirname(__file__)}", level=Qgis.Info, duration=3)
-
                 self._connect_project_signals()
                 self._refresh_raster_combo()
                 self.dockwidget.comboBox.currentIndexChanged.connect(self._on_raster_selected)
                 self.dockwidget.Apply.clicked.connect(self._on_apply_clicked)
+                self.dockwidget.checkBoxNoData.stateChanged.connect(self._on_nodata_checked)
 
             # connect to provide cleanup on closing of dockwidget
             self.dockwidget.closingPlugin.connect(self.onClosePlugin)
@@ -320,6 +352,16 @@ class RasterStretch:
             self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dockwidget)
             self.dockwidget.show()
 
+    def _on_nodata_checked(self, state):
+        """Handle NoData checkbox state change."""
+        checkBox = self.dockwidget.checkBoxNoData
+        if state == Qt.Checked:
+            # Enable lineEditNoData:
+            self.dockwidget.lineEditNoData.setEnabled(True)
+        else:
+            self.dockwidget.lineEditNoData.setEnabled(False)
+        return
+
     def _on_apply_clicked(self):
         """Apply stretch to the selected raster layer."""
         current_min = self.dockwidget.minPercVal.value()
@@ -328,33 +370,112 @@ class RasterStretch:
         lyr = self._selected_layer()
         if lyr is None:
             return
+        renderer = lyr.renderer()
+        provider = lyr.dataProvider()
         extent = (self.iface.mapCanvas().extent() if use_canvas_extent else lyr.extent())
 
-        min_val, max_val = _percentile_from_hist(
-            self._selected_layer().dataProvider(),
-            1,
-            float(current_min),
-            float(current_max),
-            extent,
-            256)
+        if isinstance(renderer, QgsSingleBandGrayRenderer):
+            band = renderer.grayBand() or 1
+            min_val, max_val = self._percentile_from_hist(
+                provider=provider,
+                band=band,
+                lower_pct=float(current_min),
+                upper_pct=float(current_max),
+                extent=extent,
+                bins=512)
 
-        prov = lyr.dataProvider()
-        raw_dtype = prov.dataType(1)
-        try:
-            qdtype = Qgis.DataType(raw_dtype)  # works when underlying value maps 1:1
-        except Exception:
-            # Safe fallback if mapping ever fails
-            qdtype = Qgis.DataType.Float32
+            if min_val is None or max_val is None:
+                self.iface.messageBar().pushMessage("RasterStretch", "Failed to compute percentiles", level=Qgis.Warning, duration=4)
+                self.iface.messageBar().pushMessage("RasterStretch", f"min_val={min_val}, max_val={max_val}",
+                                                    level=Qgis.Info, duration=4)
+                return
 
-        ce = QgsContrastEnhancement(qdtype)
-        ce.setMinimumValue(min_val)
-        ce.setMaximumValue(max_val)
-        ce.setContrastEnhancementAlgorithm(
+            raw_dtype = provider.dataType(band)
+            ce = QgsContrastEnhancement(raw_dtype)
+            ce.setMinimumValue(min_val)
+            ce.setMaximumValue(max_val)
+            ce.setContrastEnhancementAlgorithm(
             QgsContrastEnhancement.StretchToMinimumMaximum, True)
+            renderer.setContrastEnhancement(ce)
 
-        renderer = QgsSingleBandGrayRenderer(prov, 1)
-        lyr.setRenderer(renderer)
-        lyr.triggerRepaint()
+            lyr.setRenderer(renderer.clone())
+            lyr.triggerRepaint()
+            self.iface.messageBar().pushMessage(f"RasterStretch",
+                                                f"Applied stretch: {current_min:.1f} - {current_max:.1f} percentile",
+                                                level=Qgis.Success,
+                                                duration=4)
+            return
+
+        if isinstance(renderer, QgsMultiBandColorRenderer):
+            rb, gb, bb = renderer.redBand(), renderer.greenBand(), renderer.blueBand()
+            for band, setter in [
+                (rb, getattr(renderer, "setRedContrastEnhancement", None)),
+                (gb, getattr(renderer, "setGreenContrastEnhancement", None)),
+                (bb, getattr(renderer, "setBlueContrastEnhancement", None))
+            ]:
+                if band:
+                    min_val, max_val = self._percentile_from_hist(
+                        provider=provider,
+                        band=band,
+                        lower_pct=float(current_min),
+                        upper_pct=float(current_max),
+                        extent=extent,
+                        bins=512)
+
+                    if min_val is None or max_val is None:
+                        self.iface.messageBar().pushMessage("RasterStretch", f"Failed to compute percentiles for band {band}", level=Qgis.Warning, duration=4)
+                        return
+
+                    raw_dtype = provider.dataType(band)
+                    ce = QgsContrastEnhancement(raw_dtype)
+                    ce.setMinimumValue(min_val)
+                    ce.setMaximumValue(max_val)
+                    ce.setContrastEnhancementAlgorithm(
+                        QgsContrastEnhancement.StretchToMinimumMaximum, True)
+                    if callable(setter):
+                        setter(ce)
+            lyr.setRenderer(renderer.clone())
+            lyr.triggerRepaint()
+            self.iface.messageBar().pushMessage(f"RasterStretch",
+                                                f"Applied stretch: {current_min:.1f} - {current_max:.1f} percentile",
+                                                level=Qgis.Success,
+                                                duration=4)
+            return
+
+        if isinstance(renderer, QgsSingleBandPseudoColorRenderer) or isinstance(renderer, QgsRasterRenderer):
+            band = 1
+            min_val, max_val = self._percentile_from_hist(
+                provider=provider,
+                band=band,
+                lower_pct=float(current_min),
+                upper_pct=float(current_max),
+                extent=extent,
+                bins=512)
+            if min_val is None or max_val is None:
+                self.iface.messageBar().pushMessage("RasterStretch", "Failed to compute percentiles", level=Qgis.Warning, duration=4)
+                return
+
+            raw_dtype = provider.dataType(band)
+            ce = QgsContrastEnhancement(raw_dtype)
+            ce.setMinimumValue(min_val)
+            ce.setMaximumValue(max_val)
+            ce.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum, True)
+
+            new_renderer = QgsSingleBandGrayRenderer(provider, band)
+            new_renderer.setContrastEnhancement(ce)
+
+            lyr.setRenderer(new_renderer)
+            lyr.triggerRepaint()
+            self.iface.messageBar().pushMessage(f"RasterStretch",
+                                                f"Applied stretch: {current_min:.1f} - {current_max:.1f} percentile",
+                                                level=Qgis.Success,
+                                                duration=4)
+            return
+
+        self.iface.messageBar().pushMessage("RasterStretch",
+                                            "Unsupported raster renderer type",
+                                            level=Qgis.Warning, duration=4)
+
 
     def _selected_layer(self) -> QgsRasterLayer | None:
         cb = self.dockwidget.comboBox
@@ -366,9 +487,28 @@ class RasterStretch:
 
     def _on_raster_selected(self, _):
         lyr = self._selected_layer()
-        stats = lyr.dataProvider().bandStatistics(1, QgsRasterBandStats.Min | QgsRasterBandStats.Max, QgsRectangle(), 1000)
-        self.dockwidget.minValText.setText(str(stats.minimumValue))
-        self.dockwidget.maxValText.setText(str(stats.maximumValue))
+
+        # Check that dataProvider has a nodata value for each band:
+        if lyr is not None:
+            provider = lyr.dataProvider()
+            if provider is not None:
+                band_count = provider.bandCount()
+                nodata_values = []
+                for band in range(1, band_count + 1):
+                    nodata = provider.sourceNoDataValue(band)
+                    nodata_values.append(nodata)
+                if all(n is not None for n in nodata_values):
+                    # All bands have a nodata value
+                    if len(set(nodata_values)) == 1:
+                        self.dockwidget.nodataText.setText(f"nodata value found: {nodata_values[0]}")
+                    else:
+                         self.dockwidget.nodataText.setText(f"nodata values found (per band): {nodata_values}")
+                elif all(n is None for n in nodata_values):
+                    # No bands have a nodata value
+                    self.dockwidget.nodataText.setText("no nodata value found")
+                else:
+                    self.dockwidget.nodataText.setText(f"nodata values found (per band): {nodata_values}")
+        return
 
 
     def _refresh_raster_combo(self):
