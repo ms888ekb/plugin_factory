@@ -91,7 +91,7 @@
     <item>
      <widget class="QLabel" name="label_6">
       <property name="text">
-       <string>upperpercentile</string>
+       <string>upper percentile</string>
       </property>
      </widget>
     </item>
