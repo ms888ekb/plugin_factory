@@ -3,16 +3,18 @@ name: QGIS Plugin - GitHub Release (monorepo)
 on:
   push:
     tags:
-      - "*-v*.*.*"  # e.g. raster_stretch_2_98-v0.1.0
+      - "*-v*.*.*"   # e.g. raster_stretch_2_98-v0.1.0
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # safer for tag/metadata
 
       - name: Parse tag -> PLUGIN + VERSION
         id: parse
@@ -24,26 +26,38 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install build deps
         run: pip install --upgrade qgis-plugin-ci pyqt5
 
-      - name: Write config (points to just this plugin)
+      - name: Write config for this plugin
         run: |
-          echo "plugin_path: plugins/${{ steps.parse.outputs.plugin }}" > .qgis-plugin-ci
-          echo "changelog_path: plugins/${{ steps.parse.outputs.plugin }}/CHANGELOG.md" >> .qgis-plugin-ci
+          {
+            echo "plugin_path: plugins/${{ steps.parse.outputs.plugin }}";
+            echo "changelog_path: plugins/${{ steps.parse.outputs.plugin }}/CHANGELOG.md";
+            # tell qgis-plugin-ci explicitly which repo to release to (fixes 404)
+            echo "plugin_repo_url: https://github.com/${{ github.repository }}";
+          } > .qgis-plugin-ci
+          cat .qgis-plugin-ci
 
       - name: Package
         run: qgis-plugin-ci package ${{ steps.parse.outputs.version }}
 
-      - name: Upload artifact
+      - name: Upload artifact (ZIP)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.parse.outputs.plugin }}-${{ steps.parse.outputs.version }}
-          path: build/*.zip
+          path: |
+            build/*.zip
+            *.zip
+            plugins/*.zip
 
-      - name: Create GitHub Release (for the same tag)
+      - name: Create GitHub Release for this tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: qgis-plugin-ci release ${{ steps.parse.outputs.version }} --github-token "$GITHUB_TOKEN" --release-tag "${GITHUB_REF_NAME}"
+        run: |
+          qgis-plugin-ci release ${{ steps.parse.outputs.version }} \
+            --github-token "$GITHUB_TOKEN" \
+            --release-tag "${GITHUB_REF_NAME}" \
+            -u "https://github.com/${{ github.repository }}"
