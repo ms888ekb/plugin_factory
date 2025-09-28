@@ -1,0 +1,43 @@
+# .github/workflows/release.yml
+name: QGIS Plugin – GitHub Release (monorepo)
+on:
+  push:
+    tags: ["*-v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse tag -> PLUGIN + VERSION
+        id: parse
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "plugin=${TAG%%-v*}"   >> $GITHUB_OUTPUT
+          echo "version=${TAG##*-v}" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+
+      - run: pip install --upgrade qgis-plugin-ci pyqt5
+
+      - name: Write config (points to just this plugin)
+        run: |
+          echo "plugin_path: plugins/${{ steps.parse.outputs.plugin }}" > .qgis-plugin-ci
+          echo "changelog_path: plugins/${{ steps.parse.outputs.plugin }}/CHANGELOG.md" >> .qgis-plugin-ci
+
+      - name: Package
+        run: qgis-plugin-ci package ${{ steps.parse.outputs.version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.parse.outputs.plugin }}-${{ steps.parse.outputs.version }}
+          path: build/*.zip
+
+      - name: Create GitHub Release (for the same tag)
+        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+        run: qgis-plugin-ci release ${{ steps.parse.outputs.version }} --github-token "$GITHUB_TOKEN" --release-tag "${GITHUB_REF_NAME}"
