@@ -41,10 +41,19 @@ jobs:
             echo "github_organization_slug: ${ORG}";
             echo "project_slug: ${REPO}";
           } > .qgis-plugin-ci
-          cat .qgis-plugin-ci
 
       - name: Package
         run: qgis-plugin-ci package ${{ steps.parse.outputs.version }}
+
+      - name: Ensure GitHub release exists (create/update)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ steps.parse.outputs.plugin }} v${{ steps.parse.outputs.version }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Show possible ZIP locations (debug)
         run: |
@@ -61,7 +70,7 @@ jobs:
             *.zip
             plugins/*.zip
 
-      - name: Create GitHub Release for this tag
+      - name: Attach ZIP via qgis-plugin-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: qgis-plugin-ci release ${{ steps.parse.outputs.version }} --github-token "$GITHUB_TOKEN" --release-tag "${GITHUB_REF_NAME}"
