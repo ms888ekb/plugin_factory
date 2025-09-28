@@ -31,11 +31,15 @@ jobs:
       - name: Install build deps
         run: pip install --upgrade qgis-plugin-ci pyqt5
 
-      - name: Write config for this plugin
+      - name: Write .qgis-plugin-ci (scoped to this plugin + repo slug)
         run: |
+          ORG="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
           {
             echo "plugin_path: plugins/${{ steps.parse.outputs.plugin }}";
             echo "changelog_path: plugins/${{ steps.parse.outputs.plugin }}/CHANGELOG.md";
+            echo "github_organization_slug: ${ORG}";
+            echo "project_slug: ${REPO}";
           } > .qgis-plugin-ci
           cat .qgis-plugin-ci
 
