@@ -10,9 +10,11 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Parse tag -> PLUGIN + VERSION
         id: parse
@@ -24,26 +26,51 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install build deps
         run: pip install --upgrade qgis-plugin-ci pyqt5
 
-      - name: Write config (points to just this plugin)
+      - name: Write .qgis-plugin-ci (scoped to this plugin + repo slug)
         run: |
-          echo "plugin_path: plugins/${{ steps.parse.outputs.plugin }}" > .qgis-plugin-ci
-          echo "changelog_path: plugins/${{ steps.parse.outputs.plugin }}/CHANGELOG.md" >> .qgis-plugin-ci
+          ORG="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          {
+            echo "plugin_path: plugins/${{ steps.parse.outputs.plugin }}";
+            echo "changelog_path: plugins/${{ steps.parse.outputs.plugin }}/CHANGELOG.md";
+            echo "github_organization_slug: ${ORG}";
+            echo "project_slug: ${REPO}";
+          } > .qgis-plugin-ci
 
       - name: Package
         run: qgis-plugin-ci package ${{ steps.parse.outputs.version }}
 
-      - name: Upload artifact
+      - name: Ensure GitHub release exists (create/update)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ steps.parse.outputs.plugin }} v${{ steps.parse.outputs.version }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show possible ZIP locations (debug)
+        run: |
+          ls -al || true
+          ls -al build || true
+          ls -al plugins || true
+
+      - name: Upload artifact (ZIP)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.parse.outputs.plugin }}-${{ steps.parse.outputs.version }}
-          path: build/*.zip
+          path: |
+            build/*.zip
+            *.zip
+            plugins/*.zip
 
-      - name: Create GitHub Release (for the same tag)
+      - name: Attach ZIP via qgis-plugin-ci
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: qgis-plugin-ci release ${{ steps.parse.outputs.version }} --github-token "$GITHUB_TOKEN" --release-tag "${GITHUB_REF_NAME}"
