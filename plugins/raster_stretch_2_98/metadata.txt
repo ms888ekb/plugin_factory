@@ -1,0 +1,25 @@
+[general]
+name=RasterStretch
+qgisMinimumVersion=3.22
+version=0.1.0
+author=Mikhail Sokolov
+email=sokolov.usmk@gmail.com
+description=This plugin visualizes raster layers using percentile-based contrast stretching (default 2–98).
+
+about=RasterStretch applies quick, non-destructive contrast stretching to raster layers using percentile cuts
+ (default 2–98) or custom values. It works with single-band gray, multiband RGB, and pseudocolor renderers,
+ respects source and user NoData, and can compute statistics on the full layer or the current map extent.
+ Built for large datasets, it uses sampling (and benefits from overviews) to stay fast, helping you turn raw imagery into clear, usable maps in seconds.
+
+icon=icon.png
+category=Raster
+tags=python, qgis, raster, contrast, enhancement, visualization, imagery, remote sensing, histogram, percentiles
+homepage=https://github.com/ms888ekb/plugin_factory
+repository=https://github.com/ms888ekb/plugin_factory
+tracker=https://github.com/ms888ekb/plugin_factory/issues
+license=GPL-2.0-or-later
+hasProcessingProvider=no
+experimental=False
+deprecated=False
+server=False
+changelog=0.1.0 — Initial release with 2–98% stretch, custom percentiles, NoData handling, and mini histogram preview.
