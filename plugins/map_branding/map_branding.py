@@ -21,15 +21,21 @@
  *                                                                         *
  ***************************************************************************/
 """
+from PyQt5.QtWidgets import QMenu, QToolButton
+from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
+from qgis._core import QgsRectangle
 
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
 from .map_branding_dialog import MapBrandingDialog
 import os.path
+
+from qgis.gui import QgsMapCanvas
+from .extent_picker_tool import ExtentPickerTool
 
 
 class MapBranding:
@@ -189,12 +195,61 @@ class MapBranding:
             self.first_start = False
             self.dlg = MapBrandingDialog()
 
-        # show the dialog
+        # Initialize dialog and set up the UI
         self.dlg.show()
-        # Run the dialog event loop
-        result = self.dlg.exec_()
-        # See if OK was pressed
-        if result:
-            # Do something useful here - delete the line containing pass and
-            # substitute with your code.
-            pass
+        self._setup_choose_extent_menu()
+        self.dlg.lineExtent.setPlaceholderText("xmin, ymin, xmax, ymax (project CRS)")
+
+        # Connect buttons
+        self.dlg.btnClose.clicked.connect(self._close)
+
+        self.dlg.btnBrowseLogo.clicked.connect(self._browse_logo)
+        self.dlg.btnClear.clicked.connect(lambda: self.dlg.lineLogoPath.clear())
+        self.dlg.horizontalSlider.setToolTip("Logo opacity (0-100%)")
+
+        # # Run the dialog event loop
+        # result = self.dlg.exec_()
+        # # See if OK was pressed
+        # if result:
+        #     # Do something useful here - delete the line containing pass and
+        #     # substitute with your code.
+        #     pass
+    def _setup_choose_extent_menu(self):
+        menu = QMenu(self.dlg)
+        act_canvas = QAction("From Canvas", self.dlg)
+        act_draw = QAction("Draw manually", self.dlg)
+        act_canvas.triggered.connect(self._choose_extent_from_canvas)
+        act_draw.triggered.connect(self._choose_extent_draw)
+        menu.addAction(act_canvas)
+        menu.addAction(act_draw)
+        # Make the toolbutton behave like QGIS tools do
+        self.dlg.btnChooseExtent.setMenu(menu)
+        self.dlg.btnChooseExtent.setPopupMode(QToolButton.MenuButtonPopup)
+        self.dlg.btnChooseExtent.setDefaultAction(act_canvas)  # click button = From Canvas
+
+    def _choose_extent_from_canvas(self):
+        rect = self.iface.mapCanvas().extent()
+        self._custom_extent = rect
+        self.dlg.lineExtent.setText(f"{rect.toString(6)}")
+
+    def _choose_extent_draw(self):
+        # Hide dialog while we interact with the canvas
+        self.dlg.hide()
+        tool = ExtentPickerTool(self.iface.mapCanvas())
+        # When user finishes, we’ll get a QRect in map (project CRS) coords
+        def _picked(rect: QgsRectangle | None):
+            # restore dialog first
+            self.dlg.show()
+            if rect is None:
+                return
+            self._custom_extent = rect
+        tool.extentPicked.connect(_picked)
+        self.iface.mapCanvas().setMapTool(tool)
+
+    def _browse_logo(self):
+        logo_path, _ = QtWidgets.QFileDialog.getOpenFileName(self.dlg, "Select Logo Image", "", "Image Files (*.png *.jpg *.bmp);;All Files (*)")
+        if logo_path:
+            self.dlg.lineLogoPath.setText(logo_path)
+
+    def _close(self):
+        self.dlg.close()
