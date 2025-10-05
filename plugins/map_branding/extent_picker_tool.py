@@ -1,16 +1,11 @@
-# -*- coding: utf-8 -*-
-from __future__ import annotations
-
+# extent_picker_tool.py
 from qgis.PyQt.QtCore import pyqtSignal, Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.gui import QgsMapTool, QgsRubberBand
-from qgis.core import QgsWkbTypes, QgsRectangle, QgsGeometry, QgsProject
-
+from qgis.core import QgsWkbTypes, QgsRectangle, QgsGeometry
 
 class ExtentPickerTool(QgsMapTool):
-    """Click-drag to draw a rectangle on the canvas; emits QgsRectangle.
-       Esc/right-click cancels and emits None.
-    """
+    """Drag to draw a rectangle; emits QgsRectangle (project CRS) or None."""
     extentPicked = pyqtSignal(object)  # QgsRectangle or None
 
     def __init__(self, canvas):
@@ -21,49 +16,46 @@ class ExtentPickerTool(QgsMapTool):
         self.rb.setStrokeColor(QColor(0, 0, 0))
         self.rb.setFillColor(QColor(0, 0, 0, 0))
         self.rb.setWidth(2)
-        self.start_mappt = None
+        self._start = None  # QgsPointXY (map coords)
 
     def keyPressEvent(self, e):
         if e.key() == Qt.Key_Escape:
-            self._cleanup()
-            self.extentPicked.emit(None)
+            self._finish(cancel=True)
 
     def canvasPressEvent(self, e):
         if e.button() == Qt.RightButton:
-            # cancel
-            self._cleanup()
-            self.extentPicked.emit(None)
+            self._finish(cancel=True)
             return
         if e.button() != Qt.LeftButton:
             return
-        self.start_mappt = self.toMapCoordinates(e.pos())
-        self._update_band(self.start_mappt, self.start_mappt)
+        self._start = self.toMapCoordinates(e.pos())
+        # show a tiny rect immediately
+        rect = QgsRectangle(self._start, self._start)
+        self._update_band(rect)
 
     def canvasMoveEvent(self, e):
-        if self.start_mappt is None:
+        if self._start is None:
             return
         cur = self.toMapCoordinates(e.pos())
-        self._update_band(self.start_mappt, cur)
+        rect = QgsRectangle(self._start, cur)
+        rect.normalize()  # <-- in-place!
+        self._update_band(rect)
 
     def canvasReleaseEvent(self, e):
-        if e.button() != Qt.LeftButton or self.start_mappt is None:
+        if e.button() != Qt.LeftButton or self._start is None:
             return
         end = self.toMapCoordinates(e.pos())
-        rect = QgsRectangle(self.start_mappt, end)
-        self._cleanup()
-        self.extentPicked.emit(rect)
+        rect = QgsRectangle(self._start, end)
+        rect.normalize()  # <-- in-place!
+        self._finish(cancel=False, rect=rect)
 
-    # helpers
-    def _update_band(self, p1, p2):
-        rect = QgsRectangle(p1, p2)
-        pts = [
-            rect.topLeft(), rect.topRight(),
-            rect.bottomRight(), rect.bottomLeft(), rect.topLeft()
-        ]
-        geom = QgsGeometry.fromPolygonXY([[p for p in pts]])
-        self.rb.setToGeometry(geom, None)
+    # ----- helpers -----
+    def _update_band(self, rect: QgsRectangle):
+        # simplest & API-safe: build geometry directly from the rectangle
+        self.rb.setToGeometry(QgsGeometry.fromRect(rect), None)
 
-    def _cleanup(self):
+    def _finish(self, cancel: bool, rect: QgsRectangle = None):
         self.rb.reset(QgsWkbTypes.PolygonGeometry)
         self.canvas.unsetMapTool(self)
-        self.start_mappt = None
+        self._start = None
+        self.extentPicked.emit(None if cancel else rect)

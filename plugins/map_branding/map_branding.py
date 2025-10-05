@@ -21,12 +21,14 @@
  *                                                                         *
  ***************************************************************************/
 """
-from PyQt5.QtWidgets import QMenu, QToolButton
+from PyQt5.QtGui import QColor, QPixmap
+from qgis.PyQt.QtCore import QSize, QEvent, Qt, QTimer
+from PyQt5.QtWidgets import QMenu, QToolButton, QMessageBox, QVBoxLayout, QLabel
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
-from qgis._core import QgsRectangle
+from qgis._core import QgsRectangle, QgsMapSettings, QgsMapRendererParallelJob, Qgis
 
 # Initialize Qt resources from file resources.py
 from .resources import *
@@ -198,6 +200,7 @@ class MapBranding:
         # Initialize dialog and set up the UI
         self.dlg.show()
         self._setup_choose_extent_menu()
+        self._custom_extent = None  # QgsRectangle in project CRS, or None
         self.dlg.lineExtent.setPlaceholderText("xmin, ymin, xmax, ymax (project CRS)")
 
         # Connect buttons
@@ -206,6 +209,12 @@ class MapBranding:
         self.dlg.btnBrowseLogo.clicked.connect(self._browse_logo)
         self.dlg.btnClear.clicked.connect(lambda: self.dlg.lineLogoPath.clear())
         self.dlg.horizontalSlider.setToolTip("Logo opacity (0-100%)")
+        self.dlg.btnExport.clicked.connect(self._test)  # TODO: replace with actual export function
+
+        # Link self._custom_extent to QWidget:
+        self._visualize_area_from_custom_extent()
+        QTimer.singleShot(0, self._render_preview_current_extent)
+
 
         # # Run the dialog event loop
         # result = self.dlg.exec_()
@@ -214,6 +223,76 @@ class MapBranding:
         #     # Do something useful here - delete the line containing pass and
         #     # substitute with your code.
         #     pass
+    def _test(self):
+        r = self._custom_extent
+        QMessageBox.information(self.dlg, "Debug", f"Picked extent:\n{r.toString(6)}")
+
+    def _visualize_area_from_custom_extent(self):
+        preview_container = self.dlg.widget
+        if preview_container.layout() is None:
+            preview_container.setLayout(QVBoxLayout(preview_container))
+
+        if not hasattr(self, "_previewLabel"):
+            self._previewLabel = QLabel(preview_container)
+            self._previewLabel.setObjectName("lblPreview")
+            self._previewLabel.setMinimumSize(280, 180)
+            self._previewLabel.setAlignment(Qt.AlignCenter)
+            self._previewLabel.setText("Preview")
+            self._previewLabel.setStyleSheet(
+                "QLabel { border: 1px solid #999; background: #fff; }")
+            preview_container.layout().addWidget(self._previewLabel)
+
+    def _fit_extent_to_aspect(self, rect: QgsRectangle, target_w: int, target_h: int) -> QgsRectangle:
+        if target_w <= 0 or target_h <= 0:
+            return rect
+        r = QgsRectangle(rect)
+        if r.width() <= 0 or r.height() <= 0:
+            return r
+        target_ratio = float(target_w) / float(target_h)
+        cur_ratio = r.width() / r.height()
+        if abs(cur_ratio - target_ratio) < 1e-9:
+            return r
+        cx, cy = r.center().x(), r.center().y()
+        if cur_ratio > target_ratio:  # too wide -> increase height
+            new_h = r.width() / target_ratio
+            dy = (new_h - r.height()) / 2.0
+            r.setYMinimum(r.yMinimum() - dy);
+            r.setYMaximum(r.yMaximum() + dy)
+        else:  # too tall -> increase width
+            new_w = r.height() * target_ratio
+            dx = (new_w - r.width()) / 2.0
+            r.setXMinimum(r.xMinimum() - dx);
+            r.setXMaximum(r.xMaximum() + dx)
+        return r
+
+    def _render_preview_current_extent(self):
+        """Render self._currentExtent into the preview label."""
+        rect = self._custom_extent
+        if rect is None or rect.width() <= 0 or rect.height() <= 0:
+            return
+
+        size = self._previewLabel.size()
+        w, h = max(1, size.width()), max(1, size.height())
+
+        ms = QgsMapSettings()
+        ms.setLayers(self.iface.mapCanvas().layers())
+        ms.setDestinationCrs(self.iface.mapCanvas().mapSettings().destinationCrs())
+        ms.setOutputSize(QSize(w, h))
+        ms.setOutputDpi(96)
+        bg = QColor(255, 255, 255, 0 if self.dlg.chkTransparent.isChecked() else 255)
+        ms.setBackgroundColor(bg)
+
+        ms.setExtent(self._fit_extent_to_aspect(rect, w, h))
+
+        job = QgsMapRendererParallelJob(ms)
+
+        def _on_finished():
+            self._previewLabel.setPixmap(QPixmap.fromImage(job.renderedImage()))
+
+        job.finished.connect(_on_finished)
+        job.start()
+        job.waitForFinished()
+
     def _setup_choose_extent_menu(self):
         menu = QMenu(self.dlg)
         act_canvas = QAction("From Canvas", self.dlg)
@@ -231,6 +310,7 @@ class MapBranding:
         rect = self.iface.mapCanvas().extent()
         self._custom_extent = rect
         self.dlg.lineExtent.setText(f"{rect.toString(6)}")
+        self._render_preview_current_extent()
 
     def _choose_extent_draw(self):
         # Hide dialog while we interact with the canvas
@@ -243,6 +323,7 @@ class MapBranding:
             if rect is None:
                 return
             self._custom_extent = rect
+            self._render_preview_current_extent()
         tool.extentPicked.connect(_picked)
         self.iface.mapCanvas().setMapTool(tool)
 
