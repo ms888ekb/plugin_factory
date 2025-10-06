@@ -21,7 +21,7 @@
  *                                                                         *
  ***************************************************************************/
 """
-from PyQt5.QtGui import QColor, QPixmap
+from PyQt5.QtGui import QColor, QPixmap, QImage, QPainter
 from qgis.PyQt.QtCore import QSize, QEvent, Qt, QTimer
 from PyQt5.QtWidgets import QMenu, QToolButton, QMessageBox, QVBoxLayout, QLabel
 from qgis.PyQt import QtWidgets
@@ -215,14 +215,6 @@ class MapBranding:
         self._visualize_area_from_custom_extent()
         QTimer.singleShot(0, self._render_preview_current_extent)
 
-
-        # # Run the dialog event loop
-        # result = self.dlg.exec_()
-        # # See if OK was pressed
-        # if result:
-        #     # Do something useful here - delete the line containing pass and
-        #     # substitute with your code.
-        #     pass
     def _test(self):
         r = self._custom_extent
         QMessageBox.information(self.dlg, "Debug", f"Picked extent:\n{r.toString(6)}")
@@ -235,6 +227,7 @@ class MapBranding:
         if not hasattr(self, "_previewLabel"):
             self._previewLabel = QLabel(preview_container)
             self._previewLabel.setObjectName("lblPreview")
+            self._previewLabel.setScaledContents(False)
             self._previewLabel.setMinimumSize(280, 180)
             self._previewLabel.setAlignment(Qt.AlignCenter)
             self._previewLabel.setText("Preview")
@@ -242,52 +235,57 @@ class MapBranding:
                 "QLabel { border: 1px solid #999; background: #fff; }")
             preview_container.layout().addWidget(self._previewLabel)
 
-    def _fit_extent_to_aspect(self, rect: QgsRectangle, target_w: int, target_h: int) -> QgsRectangle:
-        if target_w <= 0 or target_h <= 0:
-            return rect
-        r = QgsRectangle(rect)
-        if r.width() <= 0 or r.height() <= 0:
-            return r
-        target_ratio = float(target_w) / float(target_h)
-        cur_ratio = r.width() / r.height()
-        if abs(cur_ratio - target_ratio) < 1e-9:
-            return r
-        cx, cy = r.center().x(), r.center().y()
-        if cur_ratio > target_ratio:  # too wide -> increase height
-            new_h = r.width() / target_ratio
-            dy = (new_h - r.height()) / 2.0
-            r.setYMinimum(r.yMinimum() - dy);
-            r.setYMaximum(r.yMaximum() + dy)
-        else:  # too tall -> increase width
-            new_w = r.height() * target_ratio
-            dx = (new_w - r.width()) / 2.0
-            r.setXMinimum(r.xMinimum() - dx);
-            r.setXMaximum(r.xMaximum() + dx)
-        return r
-
     def _render_preview_current_extent(self):
-        """Render self._currentExtent into the preview label."""
+        """Render self._custom_extent centered into the preview label with blank padding."""
         rect = self._custom_extent
         if rect is None or rect.width() <= 0 or rect.height() <= 0:
             return
 
+        # 1) Preview widget size
         size = self._previewLabel.size()
-        w, h = max(1, size.width()), max(1, size.height())
+        W, H = max(1, size.width()), max(1, size.height())
+
+        # 2) Aspect ratios
+        map_ratio = rect.width() / rect.height() if rect.height() != 0 else 1.0
+        widget_ratio = W / H if H != 0 else 1.0
+
+        # 3) Compute the map image size that fits INSIDE the widget without cropping
+        if map_ratio >= widget_ratio:
+            # map is wider → span full width, reduce height
+            map_w = W
+            map_h = int(round(W / map_ratio))
+        else:
+            # map is taller → span full height, reduce width
+            map_h = H
+            map_w = int(round(H * map_ratio))
+
+        # 4) Render map into that smaller image (no extent manipulation)
+        bg = QColor(255, 255, 255, 0 if self.dlg.chkTransparent.isChecked() else 255)
 
         ms = QgsMapSettings()
         ms.setLayers(self.iface.mapCanvas().layers())
         ms.setDestinationCrs(self.iface.mapCanvas().mapSettings().destinationCrs())
-        ms.setOutputSize(QSize(w, h))
-        ms.setOutputDpi(96)
-        bg = QColor(255, 255, 255, 0 if self.dlg.chkTransparent.isChecked() else 255)
+        ms.setOutputSize(QSize(map_w, map_h))
+        ms.setOutputDpi(96)  # low DPI is fine for preview
         ms.setBackgroundColor(bg)
-
-        ms.setExtent(self._fit_extent_to_aspect(rect, w, h))
+        ms.setExtent(QgsRectangle(rect))  # DON'T expand/fit; preserve exact extent
+        ms.setRotation(self.iface.mapCanvas().rotation())
 
         job = QgsMapRendererParallelJob(ms)
 
         def _on_finished():
-            self._previewLabel.setPixmap(QPixmap.fromImage(job.renderedImage()))
+            map_img = job.renderedImage()
+
+            # 5) Composite into a full-size (W×H) image, centered (letterbox/pillarbox)
+            full = QImage(W, H, QImage.Format_ARGB32_Premultiplied)
+            full.fill(bg)
+            painter = QPainter(full)
+            x = (W - map_img.width()) // 2
+            y = (H - map_img.height()) // 2
+            painter.drawImage(x, y, map_img)
+            painter.end()
+
+            self._previewLabel.setPixmap(QPixmap.fromImage(full))
 
         job.finished.connect(_on_finished)
         job.start()
