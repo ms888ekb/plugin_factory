@@ -21,6 +21,7 @@
  *                                                                         *
  ***************************************************************************/
 """
+from PyQt5.QtCore import QSignalBlocker
 from PyQt5.QtGui import QColor, QPixmap, QImage, QPainter
 from qgis.PyQt.QtCore import QSize, QEvent, Qt, QTimer
 from PyQt5.QtWidgets import QMenu, QToolButton, QMessageBox, QVBoxLayout, QLabel
@@ -196,12 +197,12 @@ class MapBranding:
         if self.first_start == True:
             self.first_start = False
             self.dlg = MapBrandingDialog()
-
         # Initialize dialog and set up the UI
         self.dlg.show()
         self._setup_choose_extent_menu()
         self._custom_extent = None  # QgsRectangle in project CRS, or None
         self.dlg.lineExtent.setPlaceholderText("xmin, ymin, xmax, ymax (project CRS)")
+        self._initialize_size_scaler()
 
         # Connect buttons
         self.dlg.btnClose.clicked.connect(self._close)
@@ -209,15 +210,55 @@ class MapBranding:
         self.dlg.btnBrowseLogo.clicked.connect(self._browse_logo)
         self.dlg.btnClear.clicked.connect(lambda: self.dlg.lineLogoPath.clear())
         self.dlg.horizontalSlider.setToolTip("Logo opacity (0-100%)")
-        self.dlg.btnExport.clicked.connect(self._test)  # TODO: replace with actual export function
+        self.dlg.sizeScaler.valueChanged.connect(self._change_width_height)
+        self.dlg.spinWidth.valueChanged.connect(self._change_width)
+        self.dlg.spinHeigth.valueChanged.connect(self._change_height)
 
         # Link self._custom_extent to QWidget:
         self._visualize_area_from_custom_extent()
         QTimer.singleShot(0, self._render_preview_current_extent)
 
-    def _test(self):
-        r = self._custom_extent
-        QMessageBox.information(self.dlg, "Debug", f"Picked extent:\n{r.toString(6)}")
+    def _apply_dimensions(self, w: int, h: int, scale: int):
+        """Set spinWidth, spinHeigth, sizeScaler without emitting valueChanged."""
+        # Clamp to base limits (your 100% size)
+        w = int(max(0, min(w, self._width_px)))
+        h = int(max(0, min(h, self._height_px)))
+        scale = int(max(0, min(scale, 100)))
+
+        # Block signals while setting to avoid feedback loops
+        bw = QSignalBlocker(self.dlg.spinWidth)
+        bh = QSignalBlocker(self.dlg.spinHeigth)
+        bs = QSignalBlocker(self.dlg.sizeScaler)
+
+        self.dlg.spinWidth.setValue(w)
+        self.dlg.spinHeigth.setValue(h)
+        self.dlg.sizeScaler.setValue(scale)
+
+    def _change_height(self):
+        if self._custom_extent is None:
+            return
+        h = self.dlg.spinHeigth.value()
+        h = min(h, self._height_px)
+        w = int(round(h * (self._width_px / float(self._height_px))))
+        scale = w * 100.0 / self._width_px
+        self._apply_dimensions(w, h, scale)
+
+    def _change_width(self):
+        if self._custom_extent is None:
+            return
+        w = self.dlg.spinWidth.value()
+        w = min(w, self._width_px)
+        h = int(round(w * (self._height_px / float(self._width_px))))
+        scale = w * 100.0 / self._width_px
+        self._apply_dimensions(w, h, scale)
+
+    def _change_width_height(self):
+        if self._custom_extent is None:
+            return
+        current_value = self.dlg.sizeScaler.value()
+        w = int(round(self._width_px * (current_value / 100.0)))
+        h = int(round(self._height_px * (current_value / 100.0)))
+        self._apply_dimensions(w, h, current_value)
 
     def _visualize_area_from_custom_extent(self):
         preview_container = self.dlg.widget
@@ -260,7 +301,7 @@ class MapBranding:
             map_w = int(round(H * map_ratio))
 
         # 4) Render map into that smaller image (no extent manipulation)
-        bg = QColor(255, 255, 255, 0 if self.dlg.chkTransparent.isChecked() else 255)
+        bg = QColor(255, 255, 255, 255)
 
         ms = QgsMapSettings()
         ms.setLayers(self.iface.mapCanvas().layers())
@@ -290,6 +331,22 @@ class MapBranding:
         job.finished.connect(_on_finished)
         job.start()
         job.waitForFinished()
+        self._set_width_height()
+
+    def _initialize_size_scaler(self):
+        self.dlg.spinWidth.setEnabled(False)
+        self.dlg.spinHeigth.setEnabled(False)
+        self.dlg.sizeScaler.setEnabled(False)
+
+    def _set_width_height(self):
+        if self._custom_extent is None:
+            return
+        self.dlg.spinWidth.setEnabled(True)
+        self.dlg.spinHeigth.setEnabled(True)
+        self.dlg.spinWidth.setValue(self._width_px)
+        self.dlg.spinHeigth.setValue(self._height_px)
+        self.dlg.sizeScaler.setEnabled(True)
+        self.dlg.sizeScaler.setValue(100)
 
     def _setup_choose_extent_menu(self):
         menu = QMenu(self.dlg)
@@ -307,6 +364,8 @@ class MapBranding:
     def _choose_extent_from_canvas(self):
         rect = self.iface.mapCanvas().extent()
         self._custom_extent = rect
+        self._width_px = self.iface.mapCanvas().mapSettings().outputSize().width()
+        self._height_px = self.iface.mapCanvas().mapSettings().outputSize().height()
         self.dlg.lineExtent.setText(f"{rect.toString(6)}")
         self._render_preview_current_extent()
 
@@ -315,13 +374,16 @@ class MapBranding:
         self.dlg.hide()
         tool = ExtentPickerTool(self.iface.mapCanvas())
         # When user finishes, we’ll get a QRect in map (project CRS) coords
-        def _picked(rect: QgsRectangle | None):
+        def _picked(rect: QgsRectangle | None, width_px: int | None, height_px: int | None):
             # restore dialog first
             self.dlg.show()
             if rect is None:
                 return
             self._custom_extent = rect
+            self._width_px = width_px
+            self._height_px = height_px
             self._render_preview_current_extent()
+
         tool.extentPicked.connect(_picked)
         self.iface.mapCanvas().setMapTool(tool)
 

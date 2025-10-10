@@ -14,7 +14,7 @@ class ExtentPickerTool(QgsMapTool):
     with a semi-transparent background that EXACTLY matches the current rectangle size.
     Emits extentPicked(QgsRectangle) on finish, or extentPicked(None) on cancel.
     """
-    extentPicked = pyqtSignal(object)  # QgsRectangle or None
+    extentPicked = pyqtSignal(object, object, object)  # QgsRectangle or None
 
     def __init__(self, canvas):
         super().__init__(canvas)
@@ -144,6 +144,8 @@ class ExtentPickerTool(QgsMapTool):
 
         # Background covers the ENTIRE rectangle (same tone, transparent)
         self._hud_bg.setRect(left, top, max(0, w_px), max(0, h_px))
+        self.width_pix = w_px
+        self.height_pix = h_px
 
     def _finish(self, cancel: bool, rect: QgsRectangle = None):
         # Cleanup overlays and restore canvas state
@@ -152,4 +154,6 @@ class ExtentPickerTool(QgsMapTool):
         self.canvas.unsetMapTool(self)
         self._start_map = None
         self._start_screen = None
-        self.extentPicked.emit(None if cancel else rect)
+        self.extentPicked.emit(None if cancel else rect,
+                               None if cancel else self.width_pix,
+                               None if cancel else self.height_pix)
