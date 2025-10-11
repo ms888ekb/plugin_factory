@@ -23,13 +23,14 @@
 """
 from PyQt5.QtCore import QSignalBlocker
 from PyQt5.QtGui import QColor, QPixmap, QImage, QPainter
-from qgis.PyQt.QtCore import QSize, QEvent, Qt, QTimer
+from qgis.PyQt.QtCore import QSize, Qt, QTimer
 from PyQt5.QtWidgets import QMenu, QToolButton, QMessageBox, QVBoxLayout, QLabel
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
-from qgis._core import QgsRectangle, QgsMapSettings, QgsMapRendererParallelJob, Qgis
+from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+from qgis.core import QgsMapSettings, QgsMapRendererParallelJob, QgsRectangle, QgsProject
 
 # Initialize Qt resources from file resources.py
 from .resources import *
@@ -206,6 +207,7 @@ class MapBranding:
 
         # Connect buttons
         self.dlg.btnClose.clicked.connect(self._close)
+        self.dlg.btnExport.clicked.connect(self._export)
 
         self.dlg.btnBrowseLogo.clicked.connect(self._browse_logo)
         self.dlg.btnClear.clicked.connect(lambda: self.dlg.lineLogoPath.clear())
@@ -217,6 +219,83 @@ class MapBranding:
         # Link self._custom_extent to QWidget:
         self._visualize_area_from_custom_extent()
         QTimer.singleShot(0, self._render_preview_current_extent)
+
+    def _export(self):
+        # --- 1) Validate inputs ---
+        if self._custom_extent is None:
+            QMessageBox.warning(self.dlg, "No extent", "Please choose an extent first.")
+            return
+        if self._custom_extent.width() <= 0 or self._custom_extent.height() <= 0:
+            QMessageBox.warning(self.dlg, "Invalid extent", "The chosen extent is invalid.")
+            return
+
+        width_px = int(self.dlg.spinWidth.value())
+        height_px = int(self.dlg.spinHeigth.value())
+        if width_px <= 0 or height_px <= 0:
+            QMessageBox.warning(self.dlg, "Invalid size", "Width and height must be positive integers.")
+            return
+
+        # --- 2) Ask save path & format ---
+        default_name = f"{QgsProject.instance().baseName() or 'map'}_{width_px}x{height_px}"
+        filters = "PNG (*.png);;JPEG (*.jpg *.jpeg);;TIFF (*.tif *.tiff);;WEBP (*.webp)"
+        out_fp, selected_filter = QFileDialog.getSaveFileName(self.dlg, "Export map image", default_name, filters)
+        if not out_fp:
+            return
+
+        # Decide format from extension or selected filter
+        ext = out_fp.lower().split('.')[-1] if '.' in out_fp else ''
+        ext_to_fmt = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "tif": "TIFF", "tiff": "TIFF", "webp": "WEBP"}
+        fmt = ext_to_fmt.get(ext, None)
+        if fmt is None:
+            # no extension → infer from selected filter and append extension
+            if "PNG" in selected_filter:
+                fmt, out_fp = "PNG", out_fp + ".png"
+            elif "JPEG" in selected_filter:
+                fmt, out_fp = "JPEG", out_fp + ".jpg"
+            elif "TIFF" in selected_filter:
+                fmt, out_fp = "TIFF", out_fp + ".tif"
+            elif "WEBP" in selected_filter:
+                fmt, out_fp = "WEBP", out_fp + ".webp"
+            else:
+                fmt, out_fp = "PNG", out_fp + ".png"
+
+        transparent = bool(self.dlg.chkTransparent.isChecked())
+
+        # --- 3) Render map (only the picked extent) to QImage ---
+        canvas = self.iface.mapCanvas()
+
+        ms = QgsMapSettings()
+        ms.setLayers(canvas.layers())  # same layer stack
+        ms.setDestinationCrs(canvas.mapSettings().destinationCrs())  # same dest CRS
+        ms.setOutputSize(QSize(width_px, height_px))
+        ms.setOutputDpi(96)  # pixel-accurate; DPI not critical when size is in px
+        ms.setBackgroundColor(QColor(255, 255, 255, 255 if transparent else 255))
+        ms.setExtent(QgsRectangle(self._custom_extent))  # ← the chosen area
+        ms.setRotation(canvas.rotation())  # match canvas rotation
+
+        job = QgsMapRendererParallelJob(ms)
+        job.start()
+        job.waitForFinished()
+        img = job.renderedImage()  # QImage with alpha if transparent=True
+
+        # --- 4) JPEG doesn't support alpha → flatten if needed ---
+        if fmt == "JPEG" and transparent:
+            flat = QImage(width_px, height_px, QImage.Format_RGB32)
+            flat.fill(QColor(255, 255, 255))  # white background
+            p = QPainter(flat)
+            p.drawImage(0, 0, img)
+            p.end()
+            img_to_save = flat
+        else:
+            img_to_save = img
+
+        # --- 5) Save ---
+        if not img_to_save.save(out_fp, fmt):
+            QMessageBox.critical(self.dlg, "Export failed", f"Could not save image to:\n{out_fp}")
+            return
+
+        QMessageBox.information(self.dlg, "Export complete", f"Saved:\n{out_fp}")
+
 
     def _apply_dimensions(self, w: int, h: int, scale: int):
         """Set spinWidth, spinHeigth, sizeScaler without emitting valueChanged."""
