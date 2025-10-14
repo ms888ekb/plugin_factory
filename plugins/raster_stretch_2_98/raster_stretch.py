@@ -82,7 +82,7 @@ class RasterStretch:
     # ------------------------------------------------------------------ Utils
 
     @staticmethod
-    def tr(message: str) -> str:
+    def tr(message: str):
         return QCoreApplication.translate("RasterStretch", message)
 
     def add_action(
@@ -344,7 +344,7 @@ class RasterStretch:
 
     # ----------------------------------------------------------- Layer helpers
 
-    def _selected_layer(self) -> QgsRasterLayer | None:
+    def _selected_layer(self):
         cb = self.dockwidget.comboBox
         layer_id = cb.itemData(cb.currentIndex())
         if not layer_id:
