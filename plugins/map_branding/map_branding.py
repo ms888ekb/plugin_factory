@@ -21,16 +21,20 @@
  *                                                                         *
  ***************************************************************************/
 """
-from PyQt5.QtCore import QSignalBlocker
-from PyQt5.QtGui import QColor, QPixmap, QImage, QPainter
-from qgis.PyQt.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QSignalBlocker, QDir, QRectF, QEvent
+from PyQt5.QtGui import QColor, QImage, QPainter
+from PyQt5.QtSvg import QSvgRenderer
+from qgis.PyQt.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import QMenu, QToolButton, QMessageBox, QVBoxLayout, QLabel
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
+from qgis._core import QgsApplication
 from qgis.core import QgsMapSettings, QgsMapRendererParallelJob, QgsRectangle, QgsProject
+from qgis.PyQt.QtCore import QSize
+from qgis.PyQt.QtGui import QIcon, QPixmap
+
 
 # Initialize Qt resources from file resources.py
 from .resources import *
@@ -76,6 +80,11 @@ class MapBranding:
         # Check if plugin was started the first time in current QGIS session
         # Must be set in initGui() to survive plugin reloads
         self.first_start = None
+
+        # Set default SVG paths to bundled resources:
+        self._north_arrow_svg_path = None
+        self._northPreviewLabel = None
+        self._arrowPreviewTarget = None
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -198,6 +207,40 @@ class MapBranding:
         if self.first_start == True:
             self.first_start = False
             self.dlg = MapBrandingDialog()
+            self._populate_north_arrows_dropdown()
+            # 1) Grab your pre-made widget from the UI
+            self._arrowPreviewTarget = getattr(self.dlg, "arrowWidget", None)
+
+            # 2) Create or reuse a QLabel inside it for rendering
+            if self._arrowPreviewTarget is not None:
+                if isinstance(self._arrowPreviewTarget, QLabel):
+                    # arrowWidget is already a QLabel — use it directly
+                    self._northPreviewLabel = self._arrowPreviewTarget
+                else:
+                    # arrowWidget is a generic QWidget — add a QLabel inside
+                    if self._arrowPreviewTarget.layout() is None:
+                        self._arrowPreviewTarget.setLayout(QVBoxLayout(self._arrowPreviewTarget))
+                    self._northPreviewLabel = QLabel(self._arrowPreviewTarget)
+                    self._arrowPreviewLabel = self._northPreviewLabel  # optional alias if you used this name before
+                    self._northPreviewLabel.setAlignment(Qt.AlignCenter)
+                    self._northPreviewLabel.setStyleSheet("QLabel { border: 1px solid #aaa; background: transparent; }")
+                    self._arrowPreviewTarget.layout().addWidget(self._northPreviewLabel)
+
+                # optional: a sensible minimum
+                self._northPreviewLabel.setMinimumSize(72, 72)
+                self._northPreviewLabel.setScaledContents(False)  # we render at exact size, no QLabel scaling
+
+                # Re-render on container resize
+                self._arrowPreviewTarget.installEventFilter(self.dlg)
+
+            # 3) Connect the combo to update the preview
+            combo = getattr(self.dlg, "comboNorthArrowStyle", None)
+            if combo is not None:
+                combo.currentIndexChanged.connect(self._on_north_arrow_changed)
+
+            # 4) Initial render
+            self._update_north_arrow_preview()
+        self.dlg.comboNorthArrowStyle.currentIndexChanged.connect(self._on_north_arrow_changed)
         # Initialize dialog and set up the UI
         self.dlg.show()
         self._setup_choose_extent_menu()
@@ -219,6 +262,168 @@ class MapBranding:
         # Link self._custom_extent to QWidget:
         self._visualize_area_from_custom_extent()
         QTimer.singleShot(0, self._render_preview_current_extent)
+
+    def _populate_north_arrows_dropdown(self):
+        """
+        Scan QGIS SVG paths for likely north-arrow/compass SVGs and fill comboNorthArrowStyle.
+        Stores full SVG path in itemData; shows a small icon + human name as text.
+        """
+        combo = getattr(self.dlg, "comboNorthArrowStyle", None)
+        if combo is None:
+            return
+
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("None", None)  # first option
+
+        # Collect candidates from all SVG search paths
+        svg_dirs = QgsApplication.svgPaths()  # list of directories
+        want = []
+        seen = set()
+
+        # Heuristics: include files/folders with these tokens
+        tokens = ("north", "arrow", "compass", "rose")
+
+        def looks_like_north_arrow(path_lower: str) -> bool:
+            return any(tok in path_lower for tok in tokens)
+
+        for base in svg_dirs:
+            if not base:
+                continue
+            it = QDir(base)
+            # Recurse to find all .svg files
+            stack = [base]
+            while stack:
+                d = stack.pop()
+                qd = QDir(d)
+                # subdirs
+                for sub in qd.entryList(QDir.Dirs | QDir.NoDotAndDotDot):
+                    stack.append(qd.filePath(sub))
+                # files
+                for fn in qd.entryList(["*.svg"], QDir.Files):
+                    full = qd.filePath(fn)
+                    key = full.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if looks_like_north_arrow(key):
+                        want.append(full)
+
+        # Sort by filename for a stable UX
+        want.sort(key=lambda p: p.split("/")[-1].lower())
+
+        # Build icons and names
+        icon_size = QSize(48, 48)  # reasonable combo icon size
+        for path in want:
+            name = path.split("/")[-1]  # filename
+            display = name.rsplit(".", 1)[0]  # strip .svg
+            # Render a small icon thumbnail
+            pix = QPixmap(icon_size)
+            pix.fill(Qt.transparent)
+            try:
+                r = QSvgRenderer(path)
+                if r.isValid():
+                    painter = QPainter(pix)
+                    r.render(painter)
+                    painter.end()
+                    icon = QIcon(pix)
+                else:
+                    icon = QIcon()  # fallback: no icon
+            except Exception:
+                icon = QIcon()
+            combo.addItem(icon, display, path)
+
+        # Restore previous selection if any
+        if self._north_arrow_svg_path:
+            idx = combo.findData(self._north_arrow_svg_path)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def eventFilter(self, obj, ev):
+        if obj is getattr(self, "arrowWidget", None) and ev.type() == QEvent.Resize:
+            # call back into the plugin via a function the plugin set on the dialog
+            if hasattr(self, "_onArrowWidgetResized"):
+                self._onArrowWidgetResized()
+        return super().eventFilter(obj, ev)
+
+    def _on_north_arrow_changed(self, idx: int):
+        combo = getattr(self.dlg, "comboNorthArrowStyle", None)
+        if combo is None:
+            return
+        self._north_arrow_svg_path = combo.itemData(idx)  # full path or None
+        self._update_north_arrow_preview()
+
+    def _update_north_arrow_preview(self):
+        """Render the selected SVG into arrowWidget (or its child label) without overflow."""
+        lbl = self._northPreviewLabel
+        if lbl is None:
+            return
+
+        lbl.clear()
+        path = self._north_arrow_svg_path
+        if not path:
+            lbl.setText("None")
+            return
+
+        renderer = QSvgRenderer(path)
+        if not renderer.isValid():
+            lbl.setText("Invalid")
+            return
+
+        # Logical size of the label (Qt coords; independent of devicePixelRatio)
+        size = lbl.size()
+        W, H = max(1, size.width()), max(1, size.height())
+
+        # Transparent pixmap to draw into
+        pix = QPixmap(W, H)
+        pix.fill(Qt.transparent)
+
+        # Prefer the SVG viewBox to compute aspect safely
+        vb = renderer.viewBoxF()  # QRectF
+        if vb.isNull() or vb.width() <= 0 or vb.height() <= 0:
+            # Fallback to defaultSize if viewBox is missing
+            ds = renderer.defaultSize()
+            vb_w = max(1.0, float(ds.width()))
+            vb_h = max(1.0, float(ds.height()))
+        else:
+            vb_w = vb.width()
+            vb_h = vb.height()
+
+        # Add a tiny inner margin to avoid antialias bleed & stroke overhang
+        # (also helps when layout adds 1px border)
+        margin = max(1, int(round(min(W, H) * 0.03)))  # ~3% of shorter side, at least 1px
+        avail_w = max(1, W - 2 * margin)
+        avail_h = max(1, H - 2 * margin)
+
+        # Scale to fit while preserving aspect ratio (no overflow)
+        sx = avail_w / vb_w
+        sy = avail_h / vb_h
+        scale = min(sx, sy)
+
+        # Compute final integer target size, clamp to available space
+        tgt_w = int(scale * vb_w)
+        tgt_h = int(scale * vb_h)
+        tgt_w = min(tgt_w, avail_w)
+        tgt_h = min(tgt_h, avail_h)
+
+        # Center inside the label with the margin applied
+        x = (W - tgt_w) // 2
+        y = (H - tgt_h) // 2
+        target = QRectF(x, y, tgt_w, tgt_h)
+
+        # Render with antialiasing
+        p = QPainter(pix)
+        p.setRenderHints(
+            QPainter.Antialiasing |
+            QPainter.TextAntialiasing |
+            QPainter.SmoothPixmapTransform,
+            on=True
+        )
+        renderer.render(p, target)
+        p.end()
+
+        lbl.setPixmap(pix)
 
     def _export(self):
         # --- 1) Validate inputs ---

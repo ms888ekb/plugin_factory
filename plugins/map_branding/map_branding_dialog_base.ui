@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>796</width>
-    <height>400</height>
+    <width>868</width>
+    <height>464</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -45,7 +45,7 @@
      <x>30</x>
      <y>20</y>
      <width>381</width>
-     <height>371</height>
+     <height>441</height>
     </rect>
    </property>
    <property name="currentIndex">
@@ -225,48 +225,36 @@
     <attribute name="title">
      <string>Decorations</string>
     </attribute>
-    <widget class="QGroupBox" name="northArroyBox">
+    <widget class="QGroupBox" name="northArrowBox">
+     <property name="enabled">
+      <bool>true</bool>
+     </property>
      <property name="geometry">
       <rect>
        <x>20</x>
        <y>10</y>
        <width>321</width>
-       <height>151</height>
+       <height>211</height>
       </rect>
      </property>
      <property name="title">
       <string>North Arrow</string>
      </property>
-     <widget class="QComboBox" name="comboBox">
+     <widget class="QComboBox" name="comboNorthArrowStyle">
       <property name="geometry">
        <rect>
         <x>60</x>
-        <y>20</y>
+        <y>30</y>
         <width>231</width>
         <height>22</height>
        </rect>
       </property>
-      <item>
-       <property name="text">
-        <string>Style1</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Style2</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Style3</string>
-       </property>
-      </item>
      </widget>
      <widget class="QLabel" name="label_5">
       <property name="geometry">
        <rect>
         <x>10</x>
-        <y>20</y>
+        <y>30</y>
         <width>31</width>
         <height>16</height>
        </rect>
@@ -279,7 +267,7 @@
       <property name="geometry">
        <rect>
         <x>10</x>
-        <y>50</y>
+        <y>60</y>
         <width>111</width>
         <height>17</height>
        </rect>
@@ -292,7 +280,7 @@
       <property name="geometry">
        <rect>
         <x>10</x>
-        <y>80</y>
+        <y>90</y>
         <width>71</width>
         <height>16</height>
        </rect>
@@ -305,7 +293,7 @@
       <property name="geometry">
        <rect>
         <x>60</x>
-        <y>120</y>
+        <y>170</y>
         <width>231</width>
         <height>22</height>
        </rect>
@@ -318,7 +306,7 @@
       <property name="geometry">
        <rect>
         <x>10</x>
-        <y>120</y>
+        <y>170</y>
         <width>41</width>
         <height>16</height>
        </rect>
@@ -331,7 +319,7 @@
       <property name="geometry">
        <rect>
         <x>60</x>
-        <y>80</y>
+        <y>90</y>
         <width>69</width>
         <height>22</height>
        </rect>
@@ -357,12 +345,22 @@
        </property>
       </item>
      </widget>
+     <widget class="QWidget" name="arrowWidget" native="true">
+      <property name="geometry">
+       <rect>
+        <x>170</x>
+        <y>70</y>
+        <width>101</width>
+        <height>91</height>
+       </rect>
+      </property>
+     </widget>
     </widget>
     <widget class="QGroupBox" name="scaleBarBox">
      <property name="geometry">
       <rect>
        <x>20</x>
-       <y>180</y>
+       <y>240</y>
        <width>321</width>
        <height>161</height>
       </rect>
