@@ -21,28 +21,29 @@
  *                                                                         *
  ***************************************************************************/
 """
-from PyQt5.QtCore import QSignalBlocker, QDir, QRectF, QEvent
-from PyQt5.QtGui import QColor, QImage, QPainter
-from PyQt5.QtSvg import QSvgRenderer
-from qgis.PyQt.QtCore import Qt, QTimer
-from PyQt5.QtWidgets import QMenu, QToolButton, QMessageBox, QVBoxLayout, QLabel
-from qgis.PyQt import QtWidgets
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtWidgets import QAction
-from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
-from qgis._core import QgsApplication
-from qgis.core import QgsMapSettings, QgsMapRendererParallelJob, QgsRectangle, QgsProject
-from qgis.PyQt.QtCore import QSize
-from qgis.PyQt.QtGui import QIcon, QPixmap
-
-
-# Initialize Qt resources from file resources.py
-from .resources import *
-# Import the code for the dialog
-from .map_branding_dialog import MapBrandingDialog
 import os.path
 
-from qgis.gui import QgsMapCanvas
+# Qt (via QGIS’ PyQt shim)
+from qgis.PyQt import QtWidgets
+from qgis.PyQt.QtCore import (
+    Qt, QTimer, QSettings, QTranslator, QCoreApplication,
+    QSize, QRectF, QEvent, QDir, QSignalBlocker
+)
+from qgis.PyQt.QtGui import (
+    QIcon, QPixmap, QPainter, QColor, QImage
+)
+from qgis.PyQt.QtWidgets import (
+    QAction, QFileDialog, QMessageBox, QMenu, QToolButton, QVBoxLayout, QLabel
+)
+from qgis.PyQt.QtSvg import QSvgRenderer
+
+# QGIS core
+from qgis.core import (
+    QgsApplication, QgsMapSettings, QgsMapRendererParallelJob,
+    QgsRectangle, QgsProject
+)
+
+from .map_branding_dialog import MapBrandingDialog
 from .extent_picker_tool import ExtentPickerTool
 
 
@@ -85,6 +86,8 @@ class MapBranding:
         self._north_arrow_svg_path = None
         self._northPreviewLabel = None
         self._arrowPreviewTarget = None
+        self._north_arrow_scale_pct = 18  # % of shorter preview side (default size)
+        self._north_arrow_position = "Top Left"
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -236,11 +239,19 @@ class MapBranding:
             # 3) Connect the combo to update the preview
             combo = getattr(self.dlg, "comboNorthArrowStyle", None)
             if combo is not None:
-                combo.currentIndexChanged.connect(self._on_north_arrow_changed)
+                combo.currentIndexChanged.connect(self._on_north_arrow_style_changed)
 
             # 4) Initial render
             self._update_north_arrow_preview()
-        self.dlg.comboNorthArrowStyle.currentIndexChanged.connect(self._on_north_arrow_changed)
+        self.dlg.comboNorthArrowStyle.currentIndexChanged.connect(self._on_north_arrow_style_changed)
+        self.dlg.comboNorthArrowPosition.currentIndexChanged.connect(self._on_north_arrow_position_changed)
+        sl = getattr(self.dlg, "horizontalSliderArrowSize", None)
+        if sl is not None:
+            sl.setMinimum(5)  # sensible range: 5%..40% of the shorter side
+            sl.setMaximum(40)
+            sl.setSingleStep(1)
+            sl.setValue(self._north_arrow_scale_pct)
+            sl.valueChanged.connect(self._on_north_arrow_scale_changed)
         # Initialize dialog and set up the UI
         self.dlg.show()
         self._setup_choose_extent_menu()
@@ -262,6 +273,88 @@ class MapBranding:
         # Link self._custom_extent to QWidget:
         self._visualize_area_from_custom_extent()
         QTimer.singleShot(0, self._render_preview_current_extent)
+
+    def _draw_north_arrow_on_preview(self, full_img):
+        """
+        Draw the selected north arrow SVG onto 'full_img', positioned and scaled
+        relative to the *map content* (the chosen extent), not the whole preview.
+        """
+        if self._northPreviewLabel is None:
+            return
+        if not self._north_arrow_svg_path:
+            return
+
+        content = self._preview_content_rect()
+        if content.width() < 2 or content.height() < 2:
+            return
+
+        renderer = QSvgRenderer(self._north_arrow_svg_path)
+        if not renderer.isValid():
+            return
+
+        # Base size = % of the *shorter* side of the map content
+        shorter = min(content.width(), content.height())
+        base = max(1, int(round(shorter * (self._north_arrow_scale_pct / 100.0))))
+
+        # SVG aspect using viewBox if available
+        vb = renderer.viewBoxF()
+        if not vb.isNull() and vb.width() > 0 and vb.height() > 0:
+            vb_w, vb_h = vb.width(), vb.height()
+        else:
+            ds = renderer.defaultSize()
+            vb_w = max(1.0, float(ds.width()))
+            vb_h = max(1.0, float(ds.height()))
+
+        # Maintain aspect so the larger edge equals 'base'
+        if vb_w >= vb_h:
+            tgt_w = base
+            tgt_h = max(1, int(round(base * (vb_h / vb_w))))
+        else:
+            tgt_h = base
+            tgt_w = max(1, int(round(base * (vb_w / vb_h))))
+
+        # Margin from map-content edges
+        margin = max(4, int(round(shorter * 0.02)))
+
+        # Position inside the *content* rect
+        pos = (self._north_arrow_position or "Top Left").lower()
+        if "top" in pos and "left" in pos:
+            x = content.x() + margin
+            y = content.y() + margin
+        elif "top" in pos and "right" in pos:
+            x = content.x() + content.width() - tgt_w - margin
+            y = content.y() + margin
+        elif "bottom" in pos and "right" in pos:
+            x = content.x() + content.width() - tgt_w - margin
+            y = content.y() + content.height() - tgt_h - margin
+        else:  # Bottom Left
+            x = content.x() + margin
+            y = content.y() + content.height() - tgt_h - margin
+
+        # Render onto 'full_img'
+        p = QPainter(full_img)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing, on=True)
+        renderer.render(p, QRectF(x, y, tgt_w, tgt_h))
+        p.end()
+
+    def _on_north_arrow_style_changed(self, idx: int):
+        combo = self.dlg.comboNorthArrowStyle
+        self._north_arrow_svg_path = combo.itemData(idx)  # full path or None
+        # Update small icon preview (if you added it earlier)
+        self._update_north_arrow_preview()
+        # Re-render map preview with arrow
+        self._render_preview_current_extent()
+
+    def _on_north_arrow_position_changed(self, idx: int):
+        text = self.dlg.comboNorthArrowPosition.currentText().strip()
+        # Normalize to our four options (fallback to Top Left)
+        allowed = {"Top Left", "Top Right", "Bottom Right", "Bottom Left"}
+        self._north_arrow_position = text if text in allowed else "Top Left"
+        self._render_preview_current_extent()
+
+    def _on_north_arrow_scale_changed(self, value: int):
+        self._north_arrow_scale_pct = int(value)
+        self._render_preview_current_extent()
 
     def _populate_north_arrows_dropdown(self):
         """
@@ -347,12 +440,36 @@ class MapBranding:
                 self._onArrowWidgetResized()
         return super().eventFilter(obj, ev)
 
-    def _on_north_arrow_changed(self, idx: int):
-        combo = getattr(self.dlg, "comboNorthArrowStyle", None)
-        if combo is None:
-            return
-        self._north_arrow_svg_path = combo.itemData(idx)  # full path or None
-        self._update_north_arrow_preview()
+    def _preview_content_rect(self) -> QRectF:
+        """
+        Returns the QRectF (x, y, w, h) of the *map content* inside the preview image,
+        i.e., the region where the chosen extent is rendered (excluding padding).
+        """
+        if self._custom_extent is None or self._custom_extent.height() == 0:
+            return QRectF(0, 0, 0, 0)
+
+        # Full preview label size (what 'full' image is)
+        size = self._previewLabel.size()
+        W, H = max(1, size.width()), max(1, size.height())
+
+        # Aspect ratios
+        rect = self._custom_extent
+        map_ratio = rect.width() / rect.height() if rect.height() != 0 else 1.0
+        widget_ratio = W / H if H != 0 else 1.0
+
+        # Compute map image size that fits INSIDE the widget without cropping
+        if map_ratio >= widget_ratio:
+            map_w = W
+            map_h = int(round(W / map_ratio))
+        else:
+            map_h = H
+            map_w = int(round(H * map_ratio))
+
+        # Centered content origin
+        x0 = (W - map_w) // 2
+        y0 = (H - map_h) // 2
+
+        return QRectF(x0, y0, map_w, map_h)
 
     def _update_north_arrow_preview(self):
         """Render the selected SVG into arrowWidget (or its child label) without overflow."""
@@ -422,8 +539,62 @@ class MapBranding:
         )
         renderer.render(p, target)
         p.end()
-
         lbl.setPixmap(pix)
+
+    def _composite_north_arrow_on_image(self, img: QImage):
+        """Draw the selected north-arrow SVG onto 'img' in-place.
+           Placement is relative to the *map content* (here it's the FULL export image)."""
+        if not getattr(self, "_north_arrow_svg_path", None):
+            return  # nothing to draw
+
+        W, H = img.width(), img.height()
+        if W <= 1 or H <= 1:
+            return
+
+        renderer = QSvgRenderer(self._north_arrow_svg_path)
+        if not renderer.isValid():
+            return
+
+        # Size: percentage of the shorter side (from horizontalSlider_2)
+        pct = int(getattr(self, "_north_arrow_scale_pct", 18))
+        shorter = min(W, H)
+        base = max(1, int(round(shorter * (pct / 100.0))))
+
+        # Resolve SVG aspect from viewBox/defaultSize
+        vb = renderer.viewBoxF()
+        if not vb.isNull() and vb.width() > 0 and vb.height() > 0:
+            vb_w, vb_h = vb.width(), vb.height()
+        else:
+            ds = renderer.defaultSize()
+            vb_w = max(1.0, float(ds.width()))
+            vb_h = max(1.0, float(ds.height()))
+
+        # Keep aspect: larger edge == base
+        if vb_w >= vb_h:
+            tgt_w = base
+            tgt_h = max(1, int(round(base * (vb_h / vb_w))))
+        else:
+            tgt_h = base
+            tgt_w = max(1, int(round(base * (vb_w / vb_h))))
+
+        # Margin from edges
+        margin = max(4, int(round(shorter * 0.02)))
+
+        # Position inside full image (export has no letterboxing)
+        pos = (getattr(self, "_north_arrow_position", "Top Left") or "Top Left").lower()
+        if "top" in pos and "left" in pos:
+            x, y = margin, margin
+        elif "top" in pos and "right" in pos:
+            x, y = W - tgt_w - margin, margin
+        elif "bottom" in pos and "right" in pos:
+            x, y = W - tgt_w - margin, H - tgt_h - margin
+        else:  # Bottom Left (default)
+            x, y = margin, H - tgt_h - margin
+
+        p = QPainter(img)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing, on=True)
+        renderer.render(p, QRectF(x, y, tgt_w, tgt_h))
+        p.end()
 
     def _export(self):
         # --- 1) Validate inputs ---
@@ -482,6 +653,10 @@ class MapBranding:
         job.start()
         job.waitForFinished()
         img = job.renderedImage()  # QImage with alpha if transparent=True
+
+        # Add all extra branding elements here (logo, scale bar, north arrow, footer text):
+        self._composite_north_arrow_on_image(img)
+
 
         # --- 4) JPEG doesn't support alpha → flatten if needed ---
         if fmt == "JPEG" and transparent:
@@ -610,6 +785,7 @@ class MapBranding:
             painter.drawImage(x, y, map_img)
             painter.end()
 
+            self._draw_north_arrow_on_preview(full)
             self._previewLabel.setPixmap(QPixmap.fromImage(full))
 
         job.finished.connect(_on_finished)

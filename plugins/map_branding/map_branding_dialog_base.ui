@@ -289,7 +289,7 @@
        <string>Position:</string>
       </property>
      </widget>
-     <widget class="QSlider" name="horizontalSlider_2">
+     <widget class="QSlider" name="horizontalSliderArrowSize">
       <property name="geometry">
        <rect>
         <x>60</x>
@@ -315,7 +315,7 @@
        <string>Size:</string>
       </property>
      </widget>
-     <widget class="QComboBox" name="comboBox_4">
+     <widget class="QComboBox" name="comboNorthArrowPosition">
       <property name="geometry">
        <rect>
         <x>60</x>
