@@ -40,7 +40,7 @@ from qgis.PyQt.QtSvg import QSvgRenderer
 # QGIS core
 from qgis.core import (
     QgsApplication, QgsMapSettings, QgsMapRendererParallelJob,
-    QgsRectangle, QgsProject
+    QgsRectangle, QgsProject, QgsUnitTypes
 )
 
 from .map_branding_dialog import MapBrandingDialog
@@ -88,6 +88,13 @@ class MapBranding:
         self._arrowPreviewTarget = None
         self._north_arrow_scale_pct = 18  # % of shorter preview side (default size)
         self._north_arrow_position = "Top Left"
+
+        # Scale bar config
+        self._scale_bar_style = "Single Box"  # comboScaleBar
+        self._scale_bar_units_mode = "Project"  # comboScaleUnits
+        self._scale_bar_segments_left = 2  # spinScaleSegmentsLeft
+        self._scale_bar_segments_right = 2  # spinScaleSegmentsRight
+        self._scale_bar_position = "Bottom Left"  # via radio buttons
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -243,15 +250,46 @@ class MapBranding:
 
             # 4) Initial render
             self._update_north_arrow_preview()
-        self.dlg.comboNorthArrowStyle.currentIndexChanged.connect(self._on_north_arrow_style_changed)
-        self.dlg.comboNorthArrowPosition.currentIndexChanged.connect(self._on_north_arrow_position_changed)
-        sl = getattr(self.dlg, "horizontalSliderArrowSize", None)
-        if sl is not None:
-            sl.setMinimum(5)  # sensible range: 5%..40% of the shorter side
-            sl.setMaximum(40)
-            sl.setSingleStep(1)
-            sl.setValue(self._north_arrow_scale_pct)
-            sl.valueChanged.connect(self._on_north_arrow_scale_changed)
+
+            self.dlg.comboNorthArrowStyle.currentIndexChanged.connect(self._on_north_arrow_style_changed)
+            self.dlg.comboNorthArrowPosition.currentIndexChanged.connect(self._on_north_arrow_position_changed)
+            sl = getattr(self.dlg, "horizontalSliderArrowSize", None)
+            if sl is not None:
+                sl.setMinimum(5)  # sensible range: 5%..40% of the shorter side
+                sl.setMaximum(40)
+                sl.setSingleStep(1)
+                sl.setValue(self._north_arrow_scale_pct)
+                sl.valueChanged.connect(self._on_north_arrow_scale_changed)
+
+            # ----- Scale bar UI wiring -----
+            combo_scale = getattr(self.dlg, "comboScaleBar", None)
+            if combo_scale is not None:
+                combo_scale.clear()
+                combo_scale.addItems(["Single Box", "Double Box", "Line Ticks Middle"])
+                combo_scale.setCurrentText(self._scale_bar_style)
+                combo_scale.currentIndexChanged.connect(self._on_scale_bar_style_changed)
+
+            combo_units = getattr(self.dlg, "comboScaleUnits", None)
+            if combo_units is not None:
+                combo_units.clear()
+                combo_units.addItems(["Project", "m", "km", "ft", "mi"])
+                combo_units.setCurrentText(self._scale_bar_units_mode)
+                combo_units.currentIndexChanged.connect(self._on_scale_bar_units_changed)
+
+            spin_left = getattr(self.dlg, "spinScaleSegmentsLeft", None)
+            spin_right = getattr(self.dlg, "spinScaleSegmentsRight", None)
+            if spin_left is not None:
+                spin_left.setMinimum(1)
+                spin_left.setValue(self._scale_bar_segments_left)
+                spin_left.valueChanged.connect(self._on_scale_bar_segments_changed)
+            if spin_right is not None:
+                spin_right.setMinimum(0)
+                spin_right.setValue(self._scale_bar_segments_right)
+                spin_right.valueChanged.connect(self._on_scale_bar_segments_changed)
+
+            self.dlg.comboScaleBarPosition.currentIndexChanged.connect(self._on_scale_bar_position_changed)
+
+
         # Initialize dialog and set up the UI
         self.dlg.show()
         self._setup_choose_extent_menu()
@@ -273,6 +311,217 @@ class MapBranding:
         # Link self._custom_extent to QWidget:
         self._visualize_area_from_custom_extent()
         QTimer.singleShot(0, self._render_preview_current_extent)
+
+    def _draw_scale_bar(self, img: QImage, content: QRectF, extent_width_map_units: float):
+        """
+        Draws the scale bar onto img inside 'content' (map content rect).
+        Uses current style, units, segments, and position.
+        """
+        if self._scale_bar_style not in ("Single Box", "Double Box", "Line Ticks Middle"):
+            return
+        if content.width() <= 0 or content.height() <= 0 or extent_width_map_units <= 0:
+            return
+
+        total_segments = self._scale_bar_segments_left + self._scale_bar_segments_right
+        if total_segments <= 0:
+            return
+
+        # Map resolution in map units per pixel
+        mu_per_px = float(extent_width_map_units) / float(content.width())
+
+        unit_factor, unit_label = self._scale_bar_unit_factor()
+        if unit_factor <= 0:
+            return
+
+        # Display units per pixel
+        du_per_px = mu_per_px * unit_factor
+
+        # Max width of scale bar = 40% of content width
+        max_px = content.width() * 0.4
+
+        # Choose a "nice" total length in display units that fits into max_px
+        nice_bases = [1, 2, 5]
+        best_len_du = None
+        best_len_px = 0
+
+        # crude but effective: scan powers of 10
+        for exp in range(-3, 7):
+            step = 10 ** exp
+            for b in nice_bases:
+                length_du = b * step
+                length_px = length_du / du_per_px
+                if 10 <= length_px <= max_px and length_px > best_len_px:
+                    best_len_px = length_px
+                    best_len_du = length_du
+
+        # fallback: if nothing matched, just use max_px
+        if best_len_du is None:
+            best_len_du = max_px * du_per_px
+            best_len_px = max_px
+
+        seg_px = best_len_px / total_segments
+        seg_du = best_len_du / total_segments
+
+        # Bar height and text sizes
+        bar_h = max(4, int(round(content.height() * 0.02)))
+        tick_h = bar_h
+        font_px = max(8, int(round(content.height() * 0.035)))
+
+        # Margin from map-content edges
+        margin = max(4, int(round(min(content.width(), content.height()) * 0.03)))
+
+        # Anchor position (bottom positions strongly recommended for scale bars)
+        pos = (self._scale_bar_position or "Bottom Left").lower()
+
+        # We'll build a rect: (bx, by, bw, bh) inside content
+        bw = int(round(best_len_px))
+        bh = bar_h
+        if "top" in pos:
+            by = int(content.y() + margin)
+            text_above = False
+        else:  # bottom
+            by = int(content.y() + content.height() - margin - bh)
+            text_above = True
+
+        if "right" in pos:
+            bx = int(content.x() + content.width() - margin - bw)
+        else:  # left
+            bx = int(content.x() + margin)
+
+        p = QPainter(img)
+        p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing, on=True)
+
+        # Pen/brush
+        pen = QColor(0, 0, 0)
+        brush = QColor(0, 0, 0)
+        p.setPen(pen)
+
+        # Draw according to style
+        if self._scale_bar_style in ("Single Box", "Double Box"):
+            # Boxes stacked horizontally; alternate fill for Double Box.
+            y_top = by
+            for i in range(total_segments):
+                x0 = bx + int(round(i * seg_px))
+                x1 = bx + int(round((i + 1) * seg_px))
+                w = max(1, x1 - x0)
+                rect = QRectF(x0, y_top, w, bh)
+                if self._scale_bar_style == "Double Box":
+                    # alternate fill
+                    if i % 2 == 0:
+                        p.fillRect(rect, brush)
+                else:
+                    # Single box: outlined segments only
+                    p.drawRect(rect)
+            # Outline whole bar for Single Box & Double Box
+            p.drawRect(QRectF(bx, y_top, bw, bh))
+
+        elif self._scale_bar_style == "Line Ticks Middle":
+            # Draw a baseline with ticks at each segment
+            y_mid = by + bh // 2
+            p.drawLine(int(bx), y_mid, int(bx + bw), y_mid)
+            for i in range(total_segments + 1):
+                x = int(bx + i * seg_px)
+                p.drawLine(x, y_mid - tick_h // 2, x, y_mid + tick_h // 2)
+
+        # Label at end with total distance (e.g. "500 m")
+        p.setPen(pen)
+        font = p.font()
+        font.setPointSizeF(font_px * 0.75)
+        p.setFont(font)
+
+        label = f"{self._format_distance(best_len_du)} {unit_label}"
+        metrics = p.fontMetrics()
+        text_w = metrics.horizontalAdvance(label)
+        text_h = metrics.height()
+
+        if text_above:
+            tx = bx + bw - text_w
+            ty = by - 2
+        else:
+            tx = bx + bw - text_w
+            ty = by + bh + text_h
+
+        p.drawText(int(tx), int(ty), label)
+
+        p.end()
+
+    def _format_distance(self, val):
+        """Nice formatting for scale bar labels."""
+        if val >= 1000:
+            return f"{val:,.0f}"
+        if val >= 100:
+            return f"{val:,.0f}"
+        if val >= 10:
+            return f"{val:,.1f}"
+        if val >= 1:
+            return f"{val:,.2f}"
+        return f"{val:.2g}"
+
+    def _scale_bar_unit_factor(self):
+        """
+        Returns (factor, label) where:
+          displayed_value = map_units * factor
+        """
+        # Destination CRS of canvas / export
+        dest_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+        map_unit = dest_crs.mapUnits()  # QgsUnitTypes.DistanceUnit
+
+        mode = self._scale_bar_units_mode
+
+        # Project units: show native map units
+        if mode == "Project":
+            return 1.0, QgsUnitTypes.toAbbreviatedString(map_unit)
+
+        # Target units
+        if mode == "m":
+            target = QgsUnitTypes.DistanceMeters
+            label = "m"
+        elif mode == "km":
+            target = QgsUnitTypes.DistanceKilometers
+            label = "km"
+        elif mode == "ft":
+            target = QgsUnitTypes.DistanceFeet
+            label = "ft"
+        elif mode == "mi":
+            target = QgsUnitTypes.DistanceMiles
+            label = "mi"
+        else:
+            # Fallback to project units
+            return 1.0, QgsUnitTypes.toAbbreviatedString(map_unit)
+
+        factor = QgsUnitTypes.fromUnitToUnitFactor(map_unit, target)
+        return factor, label
+
+    def _on_scale_bar_style_changed(self, idx: int):
+        combo = getattr(self.dlg, "comboScaleBar", None)
+        if combo is None:
+            return
+        self._scale_bar_style = combo.currentText()
+        self._render_preview_current_extent()
+
+    def _on_scale_bar_units_changed(self, idx: int):
+        combo = getattr(self.dlg, "comboScaleUnits", None)
+        if combo is None:
+            return
+        self._scale_bar_units_mode = combo.currentText()
+        self._render_preview_current_extent()
+
+    def _on_scale_bar_segments_changed(self, value: int):
+        spin_left = getattr(self.dlg, "spinScaleSegmentsLeft", None)
+        spin_right = getattr(self.dlg, "spinScaleSegmentsRight", None)
+        if spin_left is not None:
+            self._scale_bar_segments_left = max(1, int(spin_left.value()))
+        if spin_right is not None:
+            self._scale_bar_segments_right = max(0, int(spin_right.value()))
+        self._render_preview_current_extent()
+
+    def _on_scale_bar_position_changed(self, idx: int):
+        pos_label = self.dlg.comboScaleBarPosition.currentText().strip()
+        # Normalize to our four options (fallback to Top Left)
+        allowed = {"Top Left", "Top Right", "Bottom Right", "Bottom Left"}
+        if pos_label in allowed:
+            self._scale_bar_position = pos_label
+            self._render_preview_current_extent()
 
     def _draw_north_arrow_on_preview(self, full_img):
         """
@@ -645,7 +894,7 @@ class MapBranding:
         ms.setDestinationCrs(canvas.mapSettings().destinationCrs())  # same dest CRS
         ms.setOutputSize(QSize(width_px, height_px))
         ms.setOutputDpi(96)  # pixel-accurate; DPI not critical when size is in px
-        ms.setBackgroundColor(QColor(255, 255, 255, 255 if transparent else 255))
+        ms.setBackgroundColor(QColor(255, 255, 255, 0 if transparent else 255))
         ms.setExtent(QgsRectangle(self._custom_extent))  # ← the chosen area
         ms.setRotation(canvas.rotation())  # match canvas rotation
 
@@ -656,6 +905,9 @@ class MapBranding:
 
         # Add all extra branding elements here (logo, scale bar, north arrow, footer text):
         self._composite_north_arrow_on_image(img)
+
+        # Scale bar on export: full image is the map content
+        self._draw_scale_bar(img, QRectF(0, 0, width_px, height_px), self._custom_extent.width())
 
 
         # --- 4) JPEG doesn't support alpha → flatten if needed ---
@@ -786,6 +1038,10 @@ class MapBranding:
             painter.end()
 
             self._draw_north_arrow_on_preview(full)
+            # draw scale bar based on preview content + extent
+            content = self._preview_content_rect()
+            self._draw_scale_bar(full, content, rect.width())
+
             self._previewLabel.setPixmap(QPixmap.fromImage(full))
 
         job.finished.connect(_on_finished)

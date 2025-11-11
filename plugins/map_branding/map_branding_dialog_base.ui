@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>868</width>
-    <height>464</height>
+    <width>930</width>
+    <height>588</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -45,7 +45,7 @@
      <x>30</x>
      <y>20</y>
      <width>381</width>
-     <height>441</height>
+     <height>501</height>
     </rect>
    </property>
    <property name="currentIndex">
@@ -362,7 +362,7 @@
        <x>20</x>
        <y>240</y>
        <width>321</width>
-       <height>161</height>
+       <height>181</height>
       </rect>
      </property>
      <property name="title">
@@ -381,7 +381,7 @@
        <string>Style:</string>
       </property>
      </widget>
-     <widget class="QComboBox" name="comboBox_2">
+     <widget class="QComboBox" name="comboScaleBar">
       <property name="geometry">
        <rect>
         <x>50</x>
@@ -390,21 +390,6 @@
         <height>22</height>
        </rect>
       </property>
-      <item>
-       <property name="text">
-        <string>Single Box</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Double Box</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Line Ticks Middle</string>
-       </property>
-      </item>
      </widget>
      <widget class="QLabel" name="label_9">
       <property name="geometry">
@@ -419,7 +404,7 @@
        <string>Units:</string>
       </property>
      </widget>
-     <widget class="QComboBox" name="comboBox_3">
+     <widget class="QComboBox" name="comboScaleUnits">
       <property name="geometry">
        <rect>
         <x>50</x>
@@ -428,31 +413,6 @@
         <height>22</height>
        </rect>
       </property>
-      <item>
-       <property name="text">
-        <string>Project</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>m</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>km</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>ft</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>mi</string>
-       </property>
-      </item>
      </widget>
      <widget class="QLabel" name="label_10">
       <property name="geometry">
@@ -467,20 +427,7 @@
        <string>Segments:</string>
       </property>
      </widget>
-     <widget class="QLabel" name="label_11">
-      <property name="geometry">
-       <rect>
-        <x>10</x>
-        <y>140</y>
-        <width>47</width>
-        <height>13</height>
-       </rect>
-      </property>
-      <property name="text">
-       <string>Font:</string>
-      </property>
-     </widget>
-     <widget class="QSpinBox" name="spinSegmentsLeft">
+     <widget class="QSpinBox" name="spinScaleSegmentsLeft">
       <property name="geometry">
        <rect>
         <x>70</x>
@@ -490,20 +437,10 @@
        </rect>
       </property>
      </widget>
-     <widget class="QSpinBox" name="spinSegmentsRight">
+     <widget class="QSpinBox" name="spinScaleSegmentsRight">
       <property name="geometry">
        <rect>
         <x>150</x>
-        <y>100</y>
-        <width>42</width>
-        <height>22</height>
-       </rect>
-      </property>
-     </widget>
-     <widget class="QSpinBox" name="spinScaleHeight">
-      <property name="geometry">
-       <rect>
-        <x>230</x>
         <y>100</y>
         <width>42</width>
         <height>22</height>
@@ -539,15 +476,45 @@
      <widget class="QLabel" name="label_14">
       <property name="geometry">
        <rect>
-        <x>280</x>
-        <y>100</y>
-        <width>16</width>
+        <x>10</x>
+        <y>140</y>
+        <width>71</width>
         <height>16</height>
        </rect>
       </property>
       <property name="text">
-       <string>H</string>
+       <string>Position:</string>
       </property>
+     </widget>
+     <widget class="QComboBox" name="comboScaleBarPosition">
+      <property name="geometry">
+       <rect>
+        <x>60</x>
+        <y>140</y>
+        <width>69</width>
+        <height>22</height>
+       </rect>
+      </property>
+      <item>
+       <property name="text">
+        <string>Top Left</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Top Right</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Bottom Left</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Bottom Right</string>
+       </property>
+      </item>
      </widget>
     </widget>
    </widget>
@@ -741,8 +708,8 @@
     <rect>
      <x>430</x>
      <y>40</y>
-     <width>351</width>
-     <height>351</height>
+     <width>481</width>
+     <height>481</height>
     </rect>
    </property>
   </widget>
