@@ -90,7 +90,7 @@ class MapBranding:
         self._north_arrow_position = "Top Left"
 
         # Scale bar config
-        self._scale_bar_style = "Single Box"  # comboScaleBar
+        self._scale_bar_style = None  # comboScaleBar
         self._scale_bar_units_mode = "Project"  # comboScaleUnits
         self._scale_bar_segments_left = 2  # spinScaleSegmentsLeft
         self._scale_bar_segments_right = 2  # spinScaleSegmentsRight
@@ -265,7 +265,7 @@ class MapBranding:
             combo_scale = getattr(self.dlg, "comboScaleBar", None)
             if combo_scale is not None:
                 combo_scale.clear()
-                combo_scale.addItems(["Single Box", "Double Box", "Line Ticks Middle"])
+                combo_scale.addItems(["None", "Single Box", "Double Box", "Line Ticks Middle"])
                 combo_scale.setCurrentText(self._scale_bar_style)
                 combo_scale.currentIndexChanged.connect(self._on_scale_bar_style_changed)
 
@@ -288,6 +288,9 @@ class MapBranding:
                 spin_right.valueChanged.connect(self._on_scale_bar_segments_changed)
 
             self.dlg.comboScaleBarPosition.currentIndexChanged.connect(self._on_scale_bar_position_changed)
+            cb = getattr(self.dlg, "sbWhiteBg", None)
+            if cb is not None:
+                cb.toggled.connect(lambda _checked: self._render_preview_current_extent())
 
 
         # Initialize dialog and set up the UI
@@ -315,7 +318,7 @@ class MapBranding:
     def _draw_scale_bar(self, img: QImage, content: QRectF, extent_width_map_units: float):
         """
         Draws the scale bar onto img inside 'content' (map content rect).
-        Uses current style, units, segments, and position.
+        Uses current style, units, segments, position, and optional white background (sbWhiteBg).
         """
         if self._scale_bar_style not in ("Single Box", "Double Box", "Line Ticks Middle"):
             return
@@ -343,8 +346,6 @@ class MapBranding:
         nice_bases = [1, 2, 5]
         best_len_du = None
         best_len_px = 0
-
-        # crude but effective: scan powers of 10
         for exp in range(-3, 7):
             step = 10 ** exp
             for b in nice_bases:
@@ -353,94 +354,145 @@ class MapBranding:
                 if 10 <= length_px <= max_px and length_px > best_len_px:
                     best_len_px = length_px
                     best_len_du = length_du
-
-        # fallback: if nothing matched, just use max_px
         if best_len_du is None:
             best_len_du = max_px * du_per_px
             best_len_px = max_px
 
         seg_px = best_len_px / total_segments
-        seg_du = best_len_du / total_segments
 
-        # Bar height and text sizes
+        # Bar geometry & styles
         bar_h = max(4, int(round(content.height() * 0.02)))
         tick_h = bar_h
         font_px = max(8, int(round(content.height() * 0.035)))
-
-        # Margin from map-content edges
         margin = max(4, int(round(min(content.width(), content.height()) * 0.03)))
 
-        # Anchor position (bottom positions strongly recommended for scale bars)
         pos = (self._scale_bar_position or "Bottom Left").lower()
-
-        # We'll build a rect: (bx, by, bw, bh) inside content
         bw = int(round(best_len_px))
         bh = bar_h
         if "top" in pos:
             by = int(content.y() + margin)
             text_above = False
-        else:  # bottom
+        else:
             by = int(content.y() + content.height() - margin - bh)
             text_above = True
-
         if "right" in pos:
             bx = int(content.x() + content.width() - margin - bw)
-        else:  # left
+        else:
             bx = int(content.x() + margin)
 
+        # Prepare painter
         p = QPainter(img)
         p.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing, on=True)
-
-        # Pen/brush
         pen = QColor(0, 0, 0)
         brush = QColor(0, 0, 0)
         p.setPen(pen)
 
-        # Draw according to style
-        if self._scale_bar_style in ("Single Box", "Double Box"):
-            # Boxes stacked horizontally; alternate fill for Double Box.
+        # Compute label text now (needed for background bounds)
+        font = p.font()
+        font.setPointSizeF(font_px * 0.75)
+        p.setFont(font)
+        label = f"{self._format_distance(best_len_du)} {unit_label}"
+        metrics = p.fontMetrics()
+        text_w = metrics.horizontalAdvance(label)
+        text_h = metrics.height()
+        if text_above:
+            tx = bx + bw - text_w
+            ty = by - 2
+            label_rect = QRectF(tx, ty - (text_h - metrics.ascent()), text_w, text_h)  # approx ascent baseline shift
+        else:
+            tx = bx + bw - text_w
+            ty = by + bh + text_h
+            label_rect = QRectF(tx, by + bh, text_w, text_h)
+
+        bar_rect = QRectF(bx, by, bw, bh)
+
+        # ---- Optional white background behind bar + label ----
+        white_bg = False
+        cb = getattr(self.dlg, "sbWhiteBg", None)
+        if cb is not None and cb.isChecked():
+            white_bg = True
+
+        if white_bg:
+            # Union of bar and label rects, with padding
+            union = bar_rect.united(label_rect)
+            bg_pad = max(3, int(round(min(content.width(), content.height()) * 0.01)))
+            bg_rect = QRectF(
+                union.x() - bg_pad,
+                union.y() - bg_pad,
+                union.width() + 2 * bg_pad,
+                union.height() + 2 * bg_pad
+            )
+            # Clamp to content rect (keep the bg inside the map content)
+            bg_rect = bg_rect.intersected(content)
+
+            # Slightly translucent white with light border for readability
+            p.fillRect(bg_rect, QColor(255, 255, 255, 230))
+            p.setPen(QColor(0, 0, 0, 60))
+            p.drawRect(bg_rect)
+            p.setPen(pen)  # restore solid black for bar and ticks
+
+        # ---- Draw bar ----
+        if self._scale_bar_style == "Single Box":
             y_top = by
+            left_segments = self._scale_bar_segments_left
+            right_segments = self._scale_bar_segments_right
+            if right_segments == left_segments:
+                seg_px_left = seg_px
+                seg_px_right = seg_px
+            else:
+                seg_px_left = (best_len_px / 2) / left_segments
+                seg_px_right = (best_len_px / 2) / right_segments
+
+            for i in range(left_segments):
+                x0 = bx + int(round(i * seg_px_left))
+                x1 = bx + int(round((i + 1) * seg_px_left))
+                w = max(1, x1 - x0)
+                rect = QRectF(x0, y_top, w, bh)
+                if i % 2 == 0:
+                    p.fillRect(rect, brush)
+                    rect_filled = True
+                else:
+                    p.drawRect(rect)
+                    rect_filled = False
+
+            for i in range(right_segments):
+                x0 = bx + int(round((left_segments * seg_px_left) + i * seg_px_right))
+                x1 = bx + int(round((left_segments * seg_px_left) + (i + 1) * seg_px_right))
+                w = max(1, x1 - x0)
+                rect = QRectF(x0, y_top, w, bh)
+                if rect_filled:
+                    p.drawRect(rect)
+                    rect_filled = False
+                else:
+                    p.fillRect(rect, brush)
+                    rect_filled = True
+
+            p.drawRect(QRectF(bx, y_top, bw, bh))
+
+        elif self._scale_bar_style == "Double Box":
+            y_top = by
+            half_bar_h = bh // 2
             for i in range(total_segments):
                 x0 = bx + int(round(i * seg_px))
                 x1 = bx + int(round((i + 1) * seg_px))
                 w = max(1, x1 - x0)
-                rect = QRectF(x0, y_top, w, bh)
-                if self._scale_bar_style == "Double Box":
-                    # alternate fill
-                    if i % 2 == 0:
-                        p.fillRect(rect, brush)
+                rect_bottom = QRectF(x0, y_top + half_bar_h, w, half_bar_h)
+                rect_top = QRectF(x0, y_top, w, half_bar_h)
+                if i % 2 == 0:
+                    p.fillRect(rect_bottom, brush)
+                    p.drawRect(rect_top)
                 else:
-                    # Single box: outlined segments only
-                    p.drawRect(rect)
-            # Outline whole bar for Single Box & Double Box
-            p.drawRect(QRectF(bx, y_top, bw, bh))
+                    p.fillRect(rect_top, brush)
+                    p.drawRect(rect_bottom)
 
         elif self._scale_bar_style == "Line Ticks Middle":
-            # Draw a baseline with ticks at each segment
             y_mid = by + bh // 2
             p.drawLine(int(bx), y_mid, int(bx + bw), y_mid)
             for i in range(total_segments + 1):
                 x = int(bx + i * seg_px)
                 p.drawLine(x, y_mid - tick_h // 2, x, y_mid + tick_h // 2)
 
-        # Label at end with total distance (e.g. "500 m")
-        p.setPen(pen)
-        font = p.font()
-        font.setPointSizeF(font_px * 0.75)
-        p.setFont(font)
-
-        label = f"{self._format_distance(best_len_du)} {unit_label}"
-        metrics = p.fontMetrics()
-        text_w = metrics.horizontalAdvance(label)
-        text_h = metrics.height()
-
-        if text_above:
-            tx = bx + bw - text_w
-            ty = by - 2
-        else:
-            tx = bx + bw - text_w
-            ty = by + bh + text_h
-
+        # ---- Draw label ----
         p.drawText(int(tx), int(ty), label)
 
         p.end()

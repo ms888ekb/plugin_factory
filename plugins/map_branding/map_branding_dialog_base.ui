@@ -362,7 +362,7 @@
        <x>20</x>
        <y>240</y>
        <width>321</width>
-       <height>181</height>
+       <height>221</height>
       </rect>
      </property>
      <property name="title">
@@ -515,6 +515,19 @@
         <string>Bottom Right</string>
        </property>
       </item>
+     </widget>
+     <widget class="QCheckBox" name="sbWhiteBg">
+      <property name="geometry">
+       <rect>
+        <x>10</x>
+        <y>180</y>
+        <width>111</width>
+        <height>17</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>White Background</string>
+      </property>
      </widget>
     </widget>
    </widget>
