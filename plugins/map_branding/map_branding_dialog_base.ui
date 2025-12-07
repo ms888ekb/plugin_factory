@@ -40,6 +40,9 @@
    </property>
   </widget>
   <widget class="QTabWidget" name="tabWidget">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
    <property name="geometry">
     <rect>
      <x>30</x>
@@ -49,9 +52,12 @@
     </rect>
    </property>
    <property name="currentIndex">
-    <number>1</number>
+    <number>0</number>
    </property>
    <widget class="QWidget" name="tabBranding">
+    <property name="enabled">
+     <bool>false</bool>
+    </property>
     <attribute name="title">
      <string>Branding</string>
     </attribute>
@@ -532,11 +538,17 @@
     </widget>
    </widget>
    <widget class="QWidget" name="tabMetadata">
+    <property name="enabled">
+     <bool>false</bool>
+    </property>
     <attribute name="title">
      <string>Metadata</string>
     </attribute>
    </widget>
    <widget class="QWidget" name="tabAdvanced">
+    <property name="enabled">
+     <bool>false</bool>
+    </property>
     <attribute name="title">
      <string>Advanced</string>
     </attribute>

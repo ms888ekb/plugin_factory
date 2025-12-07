@@ -364,8 +364,7 @@ class MapBranding:
         bar_h = max(4, int(round(content.height() * 0.02)))
         tick_h = bar_h
         font_px = max(8, int(round(content.height() * 0.035)))
-        margin = max(4, int(round(min(content.width(), content.height()) * 0.03)))
-
+        margin = max(8, int(round(min(content.width(), content.height()) * 0.05)))
         pos = (self._scale_bar_position or "Bottom Left").lower()
         bw = int(round(best_len_px))
         bh = bar_h
@@ -401,7 +400,10 @@ class MapBranding:
             label_rect = QRectF(tx, ty - (text_h - metrics.ascent()), text_w, text_h)  # approx ascent baseline shift
         else:
             tx = bx + bw - text_w
-            ty = by + bh + text_h
+            if self._scale_bar_style == "Single Box" or self._scale_bar_style == "Line Ticks Middle":
+                ty = by + bh + text_h
+            else:
+                ty = by + bh*2 + text_h
             label_rect = QRectF(tx, by + bh, text_w, text_h)
 
         bar_rect = QRectF(bx, by, bw, bh)
@@ -415,7 +417,10 @@ class MapBranding:
         if white_bg:
             # Union of bar and label rects, with padding
             union = bar_rect.united(label_rect)
-            bg_pad = max(3, int(round(min(content.width(), content.height()) * 0.01)))
+            if self._scale_bar_style == "Single Box" or self._scale_bar_style == "Line Ticks Middle":
+                bg_pad = max(6, int(round(min(content.width(), content.height()) * 0.02)))
+            else:
+                bg_pad = max(6, int(round(min(content.width(), content.height()) * 0.02)))
             bg_rect = QRectF(
                 union.x() - bg_pad,
                 union.y() - bg_pad,
@@ -434,16 +439,19 @@ class MapBranding:
         # ---- Draw bar ----
         if self._scale_bar_style == "Single Box":
             y_top = by
-            left_segments = self._scale_bar_segments_left
-            right_segments = self._scale_bar_segments_right
-            if right_segments == left_segments:
+            if self._scale_bar_segments_left == self._scale_bar_segments_right:
                 seg_px_left = seg_px
                 seg_px_right = seg_px
             else:
-                seg_px_left = (best_len_px / 2) / left_segments
-                seg_px_right = (best_len_px / 2) / right_segments
+                if self._scale_bar_segments_left == 0 or self._scale_bar_segments_right == 0:
+                    # All segments on one side
+                    seg_px_left = best_len_px / self._scale_bar_segments_left if self._scale_bar_segments_left > 0 else 0
+                    seg_px_right = best_len_px / self._scale_bar_segments_right if self._scale_bar_segments_right > 0 else 0
+                else:
+                    seg_px_left = (best_len_px / 2) / self._scale_bar_segments_left
+                    seg_px_right = (best_len_px / 2) / self._scale_bar_segments_right
 
-            for i in range(left_segments):
+            for i in range(self._scale_bar_segments_left):
                 x0 = bx + int(round(i * seg_px_left))
                 x1 = bx + int(round((i + 1) * seg_px_left))
                 w = max(1, x1 - x0)
@@ -455,9 +463,9 @@ class MapBranding:
                     p.drawRect(rect)
                     rect_filled = False
 
-            for i in range(right_segments):
-                x0 = bx + int(round((left_segments * seg_px_left) + i * seg_px_right))
-                x1 = bx + int(round((left_segments * seg_px_left) + (i + 1) * seg_px_right))
+            for i in range(self._scale_bar_segments_right):
+                x0 = bx + int(round((self._scale_bar_segments_left * seg_px_left) + i * seg_px_right))
+                x1 = bx + int(round((self._scale_bar_segments_left * seg_px_left) + (i + 1) * seg_px_right))
                 w = max(1, x1 - x0)
                 rect = QRectF(x0, y_top, w, bh)
                 if rect_filled:
@@ -471,26 +479,81 @@ class MapBranding:
 
         elif self._scale_bar_style == "Double Box":
             y_top = by
-            half_bar_h = bh // 2
-            for i in range(total_segments):
-                x0 = bx + int(round(i * seg_px))
-                x1 = bx + int(round((i + 1) * seg_px))
+            if self._scale_bar_segments_left == self._scale_bar_segments_right:
+                seg_px_left = seg_px
+                seg_px_right = seg_px
+            else:
+                if self._scale_bar_segments_left == 0 or self._scale_bar_segments_right == 0:
+                    # All segments on one side
+                    seg_px_left = best_len_px / self._scale_bar_segments_left if self._scale_bar_segments_left > 0 else 0
+                    seg_px_right = best_len_px / self._scale_bar_segments_right if self._scale_bar_segments_right > 0 else 0
+                else:
+                    seg_px_left = (best_len_px / 2) / self._scale_bar_segments_left
+                    seg_px_right = (best_len_px / 2) / self._scale_bar_segments_right
+
+            for i in range(self._scale_bar_segments_left):
+                x0 = bx + int(round(i * seg_px_left))
+                x1 = bx + int(round((i + 1) * seg_px_left))
                 w = max(1, x1 - x0)
-                rect_bottom = QRectF(x0, y_top + half_bar_h, w, half_bar_h)
-                rect_top = QRectF(x0, y_top, w, half_bar_h)
+                rect_top = QRectF(x0, y_top, w, bh)
+                rect_bottom = QRectF(x0, y_top + bh, w, bh)
                 if i % 2 == 0:
+                    p.fillRect(rect_top, brush)
+                    p.drawRect(rect_bottom)
+                    rect_top_filled = True
+                    rect_bottom_filled = False
+                else:
                     p.fillRect(rect_bottom, brush)
                     p.drawRect(rect_top)
+                    rect_top_filled = False
+                    rect_bottom_filled = True
+
+            for i in range(self._scale_bar_segments_right):
+                x0 = bx + int(round((self._scale_bar_segments_left * seg_px_left) + i * seg_px_right))
+                x1 = bx + int(round((self._scale_bar_segments_left * seg_px_left) + (i + 1) * seg_px_right))
+                w = max(1, x1 - x0)
+                rect_top = QRectF(x0, y_top, w, bh)
+                rect_bottom = QRectF(x0, y_top + bh, w, bh)
+                if rect_top_filled:
+                    p.drawRect(rect_top)
+                    p.fillRect(rect_bottom, brush)
+                    rect_top_filled = False
+                    rect_bottom_filled = True
                 else:
                     p.fillRect(rect_top, brush)
                     p.drawRect(rect_bottom)
+                    rect_top_filled = True
+                    rect_bottom_filled = False
+
+            p.drawRect(QRectF(bx, y_top, bw, bh))
 
         elif self._scale_bar_style == "Line Ticks Middle":
             y_mid = by + bh // 2
+            if self._scale_bar_segments_left == self._scale_bar_segments_right:
+                seg_px_left = seg_px
+                seg_px_right = seg_px
+            else:
+                if self._scale_bar_segments_left == 0 or self._scale_bar_segments_right == 0:
+                    seg_px_left = best_len_px / self._scale_bar_segments_left if self._scale_bar_segments_left > 0 else 0
+                    seg_px_right = best_len_px / self._scale_bar_segments_right if self._scale_bar_segments_right > 0 else 0
+                else:
+                    seg_px_left = (best_len_px / 2) / self._scale_bar_segments_left
+                    seg_px_right = (best_len_px / 2) / self._scale_bar_segments_right
+
             p.drawLine(int(bx), y_mid, int(bx + bw), y_mid)
-            for i in range(total_segments + 1):
-                x = int(bx + i * seg_px)
-                p.drawLine(x, y_mid - tick_h // 2, x, y_mid + tick_h // 2)
+
+            for i in range(self._scale_bar_segments_left):
+                x0 = bx + int(round(i * seg_px_left))
+                x1 = bx + int(round((i + 1) * seg_px_left))
+                w = max(1, x1 - x0)
+                p.drawLine(x0, y_mid - tick_h // 2, x0, y_mid + tick_h // 2)
+
+            for i in range(self._scale_bar_segments_right):
+                x0 = bx + int(round((self._scale_bar_segments_left * seg_px_left) + i * seg_px_right))
+                x1 = bx + int(round((self._scale_bar_segments_left * seg_px_left) + (i + 1) * seg_px_right))
+                w = max(1, x1 - x0)
+                p.drawLine(x0, y_mid - tick_h // 2, x0, y_mid + tick_h // 2)
+
 
         # ---- Draw label ----
         p.drawText(int(tx), int(ty), label)
