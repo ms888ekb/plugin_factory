@@ -52,7 +52,7 @@
     </rect>
    </property>
    <property name="currentIndex">
-    <number>0</number>
+    <number>1</number>
    </property>
    <widget class="QWidget" name="tabBranding">
     <property name="enabled">
@@ -359,6 +359,19 @@
         <width>101</width>
         <height>91</height>
        </rect>
+      </property>
+     </widget>
+     <widget class="QCheckBox" name="naWhiteBg">
+      <property name="geometry">
+       <rect>
+        <x>10</x>
+        <y>140</y>
+        <width>121</width>
+        <height>17</height>
+       </rect>
+      </property>
+      <property name="text">
+       <string>White Background</string>
       </property>
      </widget>
     </widget>

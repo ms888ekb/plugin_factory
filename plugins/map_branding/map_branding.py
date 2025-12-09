@@ -288,9 +288,13 @@ class MapBranding:
                 spin_right.valueChanged.connect(self._on_scale_bar_segments_changed)
 
             self.dlg.comboScaleBarPosition.currentIndexChanged.connect(self._on_scale_bar_position_changed)
-            cb = getattr(self.dlg, "sbWhiteBg", None)
-            if cb is not None:
-                cb.toggled.connect(lambda _checked: self._render_preview_current_extent())
+            cb_sb = getattr(self.dlg, "sbWhiteBg", None)
+            if cb_sb is not None:
+                cb_sb.toggled.connect(lambda _checked: self._render_preview_current_extent())
+
+            cb_na = getattr(self.dlg, "naWhiteBg", None)
+            if cb_na is not None:
+                cb_na.toggled.connect(lambda _checked: self._render_preview_current_extent())
 
 
         # Initialize dialog and set up the UI
@@ -698,6 +702,29 @@ class MapBranding:
         # Render onto 'full_img'
         p = QPainter(full_img)
         p.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing, on=True)
+
+        # ---- Optional white background behind bar + label ----
+        white_bg = False
+        checkbox_na_bg = getattr(self.dlg, "naWhiteBg", None)
+        if checkbox_na_bg is not None and checkbox_na_bg.isChecked():
+            white_bg = True
+        if white_bg:
+            # Union of bar and label rects, with padding
+            bg_pad = max(4, int(round(min(content.width(), content.height()) * 0.02)))
+            bg_rect = QRectF(
+                x - bg_pad,
+                y - bg_pad,
+                tgt_w + 2 * bg_pad,
+                tgt_h + 2 * bg_pad
+            )
+            # Clamp to content rect (keep the bg inside the map content)
+            bg_rect = bg_rect.intersected(content)
+
+            # Slightly translucent white with light border for readability
+            p.fillRect(bg_rect, QColor(255, 255, 255, 230))
+            p.setPen(QColor(0, 0, 0, 60))
+            p.drawRect(bg_rect)
+
         renderer.render(p, QRectF(x, y, tgt_w, tgt_h))
         p.end()
 
@@ -1042,7 +1069,6 @@ class MapBranding:
             return
 
         QMessageBox.information(self.dlg, "Export complete", f"Saved:\n{out_fp}")
-
 
     def _apply_dimensions(self, w: int, h: int, scale: int):
         """Set spinWidth, spinHeigth, sizeScaler without emitting valueChanged."""
